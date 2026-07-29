@@ -1,0 +1,6 @@
+# Files that are allowed to differ from the upstream react-native tarball of the
+# same base version. Anything else differing, added or missing fails the gate.
+# One tarball-relative path per line; '#' comments and blank lines ignored.
+package.json
+scripts/cocoapods/rncore.rb
+scripts/cocoapods/rndependencies.rb

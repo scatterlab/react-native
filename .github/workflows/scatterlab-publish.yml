@@ -1,0 +1,124 @@
+name: '[scatterlab] Publish fork to npm'
+
+# Publishes packages/react-native from this fork as @scatterlab/react-native.
+#
+# Only the npm version carries the fork suffix. ReactAndroid/gradle.properties
+# VERSION_NAME and the @react-native/* sibling pins must stay on the upstream
+# base version, otherwise Gradle resolves a nonexistent Maven coordinate and npm
+# resolves nonexistent sibling packages. The invariant checks below enforce that.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Fork version, e.g. 0.86.2-scatterlab.2 (exactly one dash before the suffix)'
+        required: true
+        type: string
+      dist_tag:
+        description: 'npm dist-tag'
+        required: true
+        default: '0.86-stable'
+        type: string
+      dry_run:
+        description: 'Pack and verify only, do not publish'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate versions
+        id: v
+        env:
+          VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-scatterlab\.[0-9]+$ ]]; then
+            echo "::error::version must look like 0.86.2-scatterlab.2 (a second dash breaks the fork suffix stripping in rncore.rb)"
+            exit 1
+          fi
+          # Both inputs reach a shell command later; keep them to a charset that
+          # cannot break out of it.
+          if ! [[ "$DIST_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::dist_tag must match ^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            exit 1
+          fi
+          BASE="${VERSION%-scatterlab.*}"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Fork version $VERSION on base $BASE"
+
+          GRADLE_VERSION=$(sed -n 's/^VERSION_NAME=//p' packages/react-native/ReactAndroid/gradle.properties)
+          if [ "$GRADLE_VERSION" != "$BASE" ]; then
+            echo "::error::ReactAndroid/gradle.properties VERSION_NAME is '$GRADLE_VERSION', expected the upstream base '$BASE'. Android resolves com.facebook.react:react-android:<VERSION_NAME> from Maven Central, so it must not carry the fork suffix."
+            exit 1
+          fi
+
+          node -e '
+            const base = process.argv[1];
+            const pkg = require("./packages/react-native/package.json");
+            const bad = Object.entries(pkg.dependencies)
+              .filter(([n]) => n.startsWith("@react-native/"))
+              .filter(([, v]) => v !== base);
+            if (bad.length) {
+              console.error("::error::sibling pins must stay on the upstream base " + base + ": " + JSON.stringify(bad));
+              process.exit(1);
+            }
+            if (!pkg.bin || pkg.bin["react-native"] !== "cli.js") {
+              console.error("::error::bin must stay {\"react-native\": \"cli.js\"} - consumers copy that symlink");
+              process.exit(1);
+            }
+          ' "$BASE"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: yarn install --frozen-lockfile
+
+      # types_generated/ (237 files) ships in the tarball but is not in git.
+      # The other 14 generated files come from the package's own prepack hook,
+      # which npm pack runs automatically.
+      - run: yarn build-types --skip-snapshot
+
+      - name: Set fork version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "packages/react-native/package.json";
+            const before = fs.readFileSync(p, "utf8");
+            const after = before.replace(/("version":\s*")[^"]*(")/, `$1${process.env.VERSION}$2`);
+            if (after === before) throw new Error("version field not replaced");
+            fs.writeFileSync(p, after);
+          '
+          node -p "require('./packages/react-native/package.json').version"
+
+      - name: Pack
+        id: pack
+        working-directory: packages/react-native
+        run: |
+          set -euo pipefail
+          TGZ=$(npm pack | tail -1)
+          echo "tgz=$PWD/$TGZ" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tarball against upstream
+        env:
+          TGZ: ${{ steps.pack.outputs.tgz }}
+          BASE: ${{ steps.v.outputs.base }}
+        run: .github/scatterlab/verify-tarball.sh "$TGZ" "$BASE"
+
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        working-directory: packages/react-native
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TGZ: ${{ steps.pack.outputs.tgz }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: npm publish "$TGZ" --tag "$DIST_TAG" --access public --registry=https://registry.npmjs.org
