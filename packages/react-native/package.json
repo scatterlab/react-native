@@ -1,5 +1,6 @@
 {
   "name": "@scatterlab/react-native",
+  "name": "@scatterlab/react-native",
   "version": "0.87.0-scatterlab.0",
   "description": "A framework for building native apps using React",
   "license": "MIT",

@@ -4,3 +4,9 @@
 package.json
 scripts/cocoapods/rncore.rb
 scripts/cocoapods/rndependencies.rb
+
+# iOS CJK IME composition, cause 7a of https://github.com/react/react-native/pull/56082.
+# These are compiled into React.xcframework, not from node_modules, so they only take
+# effect through the fork's own prebuilt release - see README.md.
+Libraries/Text/TextInput/Multiline/RCTUITextView.mm
+Libraries/Text/TextInput/Singleline/RCTUITextField.mm
