@@ -201,10 +201,45 @@ hermesCommand.value("../../node_modules/react-native/sdks/hermesc/%OS-BIN%/herme
 ```
 0.86.2에 존재하지 않는 경로다. RNGP의 hermesc 탐색은 `react.hermesCommand`가 설정돼 있으면 **즉시 반환하고 fallthrough 하지 않으므로**(`PathUtils.kt:133-172`) 새 위치로 내려가지 못한다. 단순 삭제도 불가 — `react.root` 기본값이 `packages/app`이고 `packages/app/node_modules`에는 `.cache`/`.generated`뿐이라 상대경로가 빗나간다. 고칠 값: `../../node_modules/hermes-compiler/hermesc/%OS-BIN%/hermesc`
 
+## iOS prebuilt core를 우리가 만든다
+
+0.86에서 iOS prebuilt는 **opt-out 기본값**이고, prebuilt가 켜지면 `podspec_sources`가 헤더만 반환해 **모든 React\* pod의 구현이 `React.xcframework`에서 온다**(81개 podspec 중 69개가 이 스위치를 탄다). 실측: `RCTUITextView` / `RCTUITextField` / `RCTTextInputComponentView` 세 클래스 모두 상류 0.86.2 아티팩트의 Mach-O에 심볼로 존재한다(`nm -gU React`). 즉 **iOS 소스 수정은 prebuilt가 켜진 채로는 조용히 무효**다.
+
+측정된 대가 (맨몸 0.86.2 앱, Debug/simulator 클린):
+
+| | pod install | 클린 빌드 | CompileC |
+| --- | --- | --- | --- |
+| prebuilt | 48s | 52s | 64 |
+| source (`RCT_USE_PREBUILT_RNCORE=0`) | 14s | 466s | 1522 |
+
+클린 사이클 100s vs 480s. 개발자 전원이 클린빌드마다 +6분을 내는 것보다 fork 버전당 CI에서 한 번 굽는 편이 싸다.
+
+### 조달 경로
+
+`.github/workflows/scatterlab-prebuild-ios.yml`이 `React.xcframework`를 빌드해 **`prebuilt-ios-<version>` 릴리스**에 붙이고, `scripts/cocoapods/rncore.rb#stable_tarball_url`이 그 에셋을 먼저 조회한다. 없으면 상류 Maven(base 버전)으로 폴백한다.
+
+- **소비자 설정 0.** URL이 fork가 배포하는 Ruby 안에 있어 Podfile·CI에 env를 뿌릴 필요가 없다
+- **캐시 파일명은 fork 버전 유지.** `download_rncore_tarball`이 `version`을 별도 인자로 받으므로 URL만 바꿔도 `replace-rncore-version.js`와 정합한다
+- **에셋을 교체(clobber)하지 않는다.** 같은 버전으로 에셋만 바꾸면 `~/Library/Caches/ReactNative`가 warm한 개발자는 낡은 xcframework를 영구히 쓴다. 새 `-scatterlab.N`을 올린다
+- **`.sha1` 사이드카는 필수.** 없으면 검증이 fail-open으로 스킵된다. 내용은 **순수 40-hex** — `shasum` 기본 출력(`<hash>  <file>`)은 정규식에 걸려 무음 스킵된다
+
+### `FORK_REQUIRES_OWN_PREBUILT`
+
+폴백이 조용하다는 게 이 설계의 가장 위험한 지점이다: 에셋이 없거나 레포가 private이 되면 probe가 404 → 상류 아티팩트로 폴백 → **패치 안 된 프레임워크를 아무 신호 없이 출고**한다.
+
+그래서 `rncore.rb`에 상수를 둔다. 네이티브 변경이 **없는** 버전에서는 `false`이고 상류 폴백이 정확한 동작이다. iOS 네이티브 변경을 넣는 커밋에서 `true`로 바꾸면, 그 버전의 prebuilt 릴리스가 없을 때 pod install이 **abort** 한다.
+
+### 함정
+
+- **태그에 `v` 접두를 쓰지 않는다.** 상류 `publish-npm.yml`의 `v0.*.*`는 백트래킹 글롭이라 `v0.86.2-prebuilt.1`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없어 fork에서 실제로 돈다. 릴리스를 `GITHUB_TOKEN`으로 만들면 GitHub이 `push`/`create`/`release` 이벤트로 워크플로 런을 아예 만들지 않아 이중으로 안전하다
+- **`RN_DEP_VERSION=<base>`가 setup 단계에 필요하다.** prebuild는 `ReactNativeDependencies.xcframework`를 버전 붙은 Maven URL에서 받는데, 이건 `scripts/cocoapods` 밖의 JS 경로라 위의 Ruby 패치가 커버하지 않는다. fork 접미사면 nightly 폴백까지 실패해 abort 한다
+- **플랫폼 인자를 따옴표로 묶지 않는다.** `-p "ios ios-simulator"`는 잘못된 플랫폼으로 거부되고, 그때 스크립트가 **exit 0으로 조용히 종료**한다 — CI는 green인데 산출물이 없다
+- mac-catalyst 슬라이스는 만들지 않는다. 소비 측이 iOS만 선언하고, compose는 존재하는 슬라이스만 모은다
+- `RCT_SYMBOLICATE_PREBUILT_FRAMEWORKS=1`(dSYM)은 fork prebuilt에서 지원하지 않는다 — dSYM 에셋을 올리지 않으므로 그 경로는 404가 된다
+
 ## 스코프 밖
 
-- **IME 수정 반영** — 정당성 재검증 후 Phase 2. PR #56082은 상류에서 리뷰 0건이고, cause #7만 프로덕션 실증이 있으며, 나머지 6개는 미검증
-- **iOS prebuilt 전략** — Phase 1은 소스 수정이 0이라 공식 prebuilt xcframework와 정합한다. 자체 prebuilt 호스팅 여부는 Phase 2에서 실측 빌드시간·아티팩트 크기를 근거로 결정
+- **IME 수정 반영** — 정당성 재검증 후. PR #56082은 상류에서 리뷰 0건이고, cause #7만 프로덕션 실증이 있으며, 나머지 6개는 미검증
 - **RN 0.79.7→0.86.2 업그레이드**, New Architecture 전환, zeta main 적용
 - **Android 네이티브 수정** — 현재 수정 범위가 iOS ObjC++뿐이라 사설 Maven·자체 AAR·Hermes 재배포 전부 불필요. Android 소스를 건드리는 순간 이 결론이 뒤집힌다(`gradle.properties` 계약 참조)
 
