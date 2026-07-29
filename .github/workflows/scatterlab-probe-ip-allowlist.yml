@@ -1,0 +1,52 @@
+name: '[scatterlab] Probe what a hosted runner may do'
+
+# Temporary diagnostic. The org has an IP allow list, so a GitHub-hosted runner gets
+# HTTP 403 on api.github.com writes (release creation). This establishes which of the
+# operations the prebuilt pipeline needs are actually permitted, so the pipeline can be
+# split accordingly. Delete once the allow list question is settled.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make a payload
+        run: |
+          mkdir -p out
+          echo probe > out/probe.txt
+
+      - name: Can we upload a workflow artifact?
+        id: artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: scatterlab-ip-probe
+          path: out
+
+      - name: Can we read the API?
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: gh api "repos/$REPO" --jq .full_name
+
+      - name: Can we write the API (create a throwaway release)?
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release create scatterlab-ip-probe --title probe --notes probe --prerelease
+          gh release delete scatterlab-ip-probe --yes
+
+      - name: Summary
+        env:
+          ARTIFACT: ${{ steps.artifact.outcome }}
+        run: echo "artifact upload = $ARTIFACT (see the two steps above for API read/write)"
