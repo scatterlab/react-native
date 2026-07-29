@@ -55,11 +55,11 @@ class ReactNativeCoreUtils
     ## `prebuilt-ios-<version>` release. See .github/scatterlab/README.md.
     FORK_PREBUILT_RELEASE_URL = "https://github.com/scatterlab/react-native/releases/download"
 
-    ## Set to true in the same commit that introduces an iOS native change. With prebuilt
+    ## True from the commit that introduced the iOS CJK IME composition change. With prebuilt
     ## enabled the patched sources are never recompiled, so falling back to the upstream
     ## artifacts would silently ship an unpatched framework - the bug would come back with
-    ## no signal at all. While the fork carries no native change, the fallback is correct.
-    FORK_REQUIRES_OWN_PREBUILT = false
+    ## no signal at all.
+    FORK_REQUIRES_OWN_PREBUILT = true
 
     ## Sets up wether ReactNative Core should be built from source or not.
     ## If RCT_USE_PREBUILT_RNCORE is set to 1 and the artifacts exists on Maven, it will
