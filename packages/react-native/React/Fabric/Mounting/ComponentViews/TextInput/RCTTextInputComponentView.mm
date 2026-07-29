@@ -42,6 +42,28 @@ using namespace facebook::react;
 
 static NSSet<NSNumber *> *returnKeyTypesSet;
 
+#pragma mark - scatterlab IME probe
+
+// Temporary instrumentation, never to be released. Establishes UIKit's markedTextRange
+// set/clear ordering relative to the delegate callbacks and the Fabric state round trip,
+// which is the undocumented assumption every candidate CJK IME fix rests on. Grep device
+// logs for "SLIME".
+static void RCTScatterlabIMEProbe(const char *where, id<RCTBackedTextInputViewProtocol> view)
+{
+  UITextRange *marked = view.markedTextRange;
+  NSString *markedText = marked ? [view textInRange:marked] : nil;
+  UITextRange *selected = view.selectedTextRange;
+  NSInteger selStart = selected ? [view offsetFromPosition:view.beginningOfDocument toPosition:selected.start] : -1;
+  NSInteger selEnd = selected ? [view offsetFromPosition:view.beginningOfDocument toPosition:selected.end] : -1;
+  NSLog(@"SLIME %s marked=%@ markedText=%@ sel=%ld..%ld text=%@",
+        where,
+        marked ? @"Y" : @"n",
+        markedText ?: @"-",
+        (long)selStart,
+        (long)selEnd,
+        view.attributedText.string ?: @"-");
+}
+
 @implementation RCTTextInputComponentView {
   TextInputShadowNode::ConcreteState::Shared _state;
   UIView<RCTBackedTextInputViewProtocol> *_backedTextInputView;
@@ -337,6 +359,7 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
 
 - (void)updateState:(const State::Shared &)state oldState:(const State::Shared &)oldState
 {
+  RCTScatterlabIMEProbe("updateState", _backedTextInputView);
   _state = std::static_pointer_cast<const TextInputShadowNode::ConcreteState>(state);
 
   if (!_state) {
@@ -445,6 +468,7 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
 
 - (NSString *)textInputShouldChangeText:(NSString *)text inRange:(NSRange)range
 {
+  RCTScatterlabIMEProbe("shouldChangeText", _backedTextInputView);
   const auto &props = static_cast<const TextInputProps &>(*_props);
 
   if (!_backedTextInputView.textWasPasted) {
@@ -486,6 +510,7 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
 
 - (void)textInputDidChange
 {
+  RCTScatterlabIMEProbe("didChange", _backedTextInputView);
   if (_comingFromJS) {
     return;
   }
@@ -570,6 +595,7 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
                       start:(NSInteger)start
                         end:(NSInteger)end
 {
+  RCTScatterlabIMEProbe("setTextAndSelection", _backedTextInputView);
   if (_mostRecentEventCount != eventCount) {
     return;
   }
@@ -768,6 +794,7 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
 
 - (void)_setAttributedString:(NSAttributedString *)attributedString
 {
+  RCTScatterlabIMEProbe("_setAttributedString", _backedTextInputView);
   if ([self _textOf:attributedString equals:_backedTextInputView.attributedText]) {
     return;
   }
