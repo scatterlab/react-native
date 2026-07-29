@@ -92,13 +92,16 @@ jobs:
       max-parallel: 1
       matrix:
         flavor: ['Debug', 'Release']
-    env:
-      # Job-scoped so it also covers the nested `yarn install` that the prebuild's own
-      # setup runs for packages/react-native-codegen. A --cache-folder flag on our own
-      # invocation does not reach that one, which is how the second failure happened.
-      YARN_CACHE_FOLDER: ${{ runner.temp }}/yarn-cache
     steps:
       - uses: actions/checkout@v4
+
+      # Exported for every later step, so it also covers the nested `yarn install` that
+      # the prebuild's own setup runs for packages/react-native-codegen. A --cache-folder
+      # flag on our own invocation does not reach that one, which is how the second
+      # failure happened. Set here rather than in a job-level `env:` because the `runner`
+      # context is not available there.
+      - name: Isolate the yarn cache
+        run: echo "YARN_CACHE_FOLDER=$RUNNER_TEMP/yarn-cache" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
