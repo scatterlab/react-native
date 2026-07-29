@@ -85,8 +85,18 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
+      # One at a time. The runners share a $HOME, and the prebuild reaches several caches
+      # there that are not safe for concurrent use - yarn 1's is the one that bit us
+      # twice, SwiftPM's and clang's module cache are the same shape. Serialising costs
+      # wall clock on an operation that runs once per fork version.
+      max-parallel: 1
       matrix:
         flavor: ['Debug', 'Release']
+    env:
+      # Job-scoped so it also covers the nested `yarn install` that the prebuild's own
+      # setup runs for packages/react-native-codegen. A --cache-folder flag on our own
+      # invocation does not reach that one, which is how the second failure happened.
+      YARN_CACHE_FOLDER: ${{ runner.temp }}/yarn-cache
     steps:
       - uses: actions/checkout@v4
 
@@ -109,12 +119,8 @@ jobs:
       - name: Enable corepack
         run: corepack enable
 
-      # yarn 1's global cache is not safe for concurrent use, and both matrix jobs run on
-      # the same host: sharing ~/Library/Caches/Yarn produced corrupt tar extractions
-      # ("Extracting tar content of undefined failed"). A per-job cache trades one cold
-      # download for determinism.
       - name: Install dependencies
-        run: yarn install --frozen-lockfile --cache-folder "$RUNNER_TEMP/yarn-cache"
+        run: yarn install --frozen-lockfile
 
       - name: Setup the prebuild workspace
         working-directory: packages/react-native
