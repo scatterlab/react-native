@@ -104,12 +104,17 @@ jobs:
           sw_vers
           node --version
 
-      # This repo pins yarn 1 via packageManager, and a self-hosted runner has no reason
-      # to have it. corepack keeps that per-job instead of mutating a shared machine.
+      # This repo pins yarn 1 via packageManager. corepack honours that per-job instead
+      # of depending on whatever the shared machine happens to have installed.
       - name: Enable corepack
         run: corepack enable
 
-      - run: yarn install --frozen-lockfile
+      # yarn 1's global cache is not safe for concurrent use, and both matrix jobs run on
+      # the same host: sharing ~/Library/Caches/Yarn produced corrupt tar extractions
+      # ("Extracting tar content of undefined failed"). A per-job cache trades one cold
+      # download for determinism.
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --cache-folder "$RUNNER_TEMP/yarn-cache"
 
       - name: Setup the prebuild workspace
         working-directory: packages/react-native

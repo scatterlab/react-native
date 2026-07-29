@@ -229,8 +229,18 @@ hermesCommand.value("../../node_modules/react-native/sdks/hermesc/%OS-BIN%/herme
 
 그래서 `rncore.rb`에 상수를 둔다. 네이티브 변경이 **없는** 버전에서는 `false`이고 상류 폴백이 정확한 동작이다. iOS 네이티브 변경을 넣는 커밋에서 `true`로 바꾸면, 그 버전의 prebuilt 릴리스가 없을 때 pod install이 **abort** 한다.
 
+### 러너와 Xcode 계약
+
+빌드는 org의 self-hosted 러너에서 돈다 — 맥은 `[self-hosted, gaudi]`, 리눅스 스텝은 `arc-messenger-dev`. **GitHub-hosted 러너로는 릴리스를 만들 수 없다**: org에 IP allow list가 걸려 있어 hosted 러너의 인증된 `api.github.com` 쓰기가 HTTP 403으로 막힌다(아티팩트 업로드는 Actions 서비스라 통과). `publish-prebuilt.sh`가 그 상황용 fallback으로 남아 있다.
+
+**빌드에 쓰인 Xcode 버전은 호환성 계약의 일부다.** prebuilt 프레임워크는 그 Xcode의 Swift module interface를 품고 배포되므로, 소비자 Xcode와 크게 어긋나면 링크·모듈 로딩에서 터질 수 있다. 상류는 `setup-xcode`로 16.4.0을 핀하지만 우리는 러너 기본값을 쓴다(현재 gaudi = **Xcode 26.1.1 / macOS 26.1**). zeta가 Podfile에서 이미 Xcode 26용 fmt 치환을 하고 있어 그쪽에 맞추는 게 맞고, 대신 러너 Xcode가 올라가면 프레임워크 ABI 표면도 같이 움직인다는 뜻이다 — `Toolchain` 스텝이 매 런마다 버전을 찍으므로 릴리스와 대조할 수 있다.
+
+self-hosted 전환에 필요했던 조직 설정 2개: 러너 그룹의 **Allow public repositories** + 이 레포 추가, 그리고 public 레포이므로 **Fork pull request workflows → Require approval for all external contributors**(fork가 워크플로 파일을 수정한 PR로 우리 러너에서 임의 코드를 돌리는 것을 막는다).
+
 ### 함정
 
+- **matrix 잡이 같은 호스트에서 병렬로 돈다.** yarn 1의 전역 캐시는 동시성 안전하지 않아 `~/Library/Caches/Yarn` 공유 시 tar 추출이 깨진다(`Extracting tar content of undefined failed`). `--cache-folder "$RUNNER_TEMP/yarn-cache"`로 잡별 격리한다. hosted 러너에선 잡마다 머신이 달라 드러나지 않는 종류의 실패다
+- **부분 릴리스가 위험하다.** probe는 debug 에셋만 확인하므로 debug만 올라간 릴리스는 probe를 통과시키고 release flavor에서 404가 난다. 한 flavor가 실패하면 릴리스의 에셋을 지우거나 새 `-scatterlab.N`으로 다시 낸다
 - **태그에 `v` 접두를 쓰지 않는다.** 상류 `publish-npm.yml`의 `v0.*.*`는 백트래킹 글롭이라 `v0.86.2-prebuilt.1`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없어 fork에서 실제로 돈다. 릴리스를 `GITHUB_TOKEN`으로 만들면 GitHub이 `push`/`create`/`release` 이벤트로 워크플로 런을 아예 만들지 않아 이중으로 안전하다
 - **`RN_DEP_VERSION=<base>`가 setup 단계에 필요하다.** prebuild는 `ReactNativeDependencies.xcframework`를 버전 붙은 Maven URL에서 받는데, 이건 `scripts/cocoapods` 밖의 JS 경로라 위의 Ruby 패치가 커버하지 않는다. fork 접미사면 nightly 폴백까지 실패해 abort 한다
 - **플랫폼 인자를 따옴표로 묶지 않는다.** `-p "ios ios-simulator"`는 잘못된 플랫폼으로 거부되고, 그때 스크립트가 **exit 0으로 조용히 종료**한다 — CI는 green인데 산출물이 없다
