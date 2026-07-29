@@ -35,6 +35,17 @@ class ReactNativeCoreUtils
     @@react_native_version = ""
     @@use_nightly = false
     @@download_dsyms = false
+    @@fork_prebuilt_published = nil
+
+    ## This fork builds its own React.xcframework and attaches it to a
+    ## `prebuilt-ios-<version>` release. See .github/scatterlab/README.md.
+    FORK_PREBUILT_RELEASE_URL = "https://github.com/scatterlab/react-native/releases/download"
+
+    ## Set to true in the same commit that introduces an iOS native change. With prebuilt
+    ## enabled the patched sources are never recompiled, so falling back to the upstream
+    ## artifacts would silently ship an unpatched framework - the bug would come back with
+    ## no signal at all. While the fork carries no native change, the fallback is correct.
+    FORK_REQUIRES_OWN_PREBUILT = false
 
     ## Sets up wether ReactNative Core should be built from source or not.
     ## If RCT_USE_PREBUILT_RNCORE is set to 1 and the artifacts exists on Maven, it will
@@ -349,8 +360,32 @@ class ReactNativeCoreUtils
         PLIST
     end
 
+    ## Asset names mirror the upstream Maven filenames so the `.sha1` sidecar and the
+    ## archive layout stay drop-in compatible with the rest of this file.
+    def self.fork_stable_tarball_url(version, build_type, dsyms = false)
+        return "#{FORK_PREBUILT_RELEASE_URL}/prebuilt-ios-#{version}/react-native-artifacts-#{version}-reactnative-core-#{dsyms ? "dSYM-" : ""}#{build_type.to_s}.tar.gz"
+    end
+
+    ## One HEAD probe per pod install, against the debug framework only, so that all
+    ## variants resolve to the same host: a release either carries the whole set or the
+    ## whole set comes from upstream.
+    def self.fork_prebuilt_published?(version)
+        return @@fork_prebuilt_published unless @@fork_prebuilt_published.nil?
+        @@fork_prebuilt_published = artifact_exists(fork_stable_tarball_url(version, :debug))
+        if @@fork_prebuilt_published
+            rncore_log("Using this fork's prebuilt artifacts (prebuilt-ios-#{version}).")
+        elsif FORK_REQUIRES_OWN_PREBUILT
+            abort("[ReactNativeCore] This version carries iOS native changes that only exist in this fork's prebuilt framework, but no prebuilt release was found for #{version}. Run the '[scatterlab] Build iOS prebuilt core' workflow for this version, or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source.")
+        else
+            rncore_log("No prebuilt release for #{version}. Using the upstream artifacts for the base version.")
+        end
+        return @@fork_prebuilt_published
+    end
+
     def self.stable_tarball_url(version, build_type, dsyms = false)
-        ## The scatterlab fork publishes no artifacts of its own; resolve the upstream base version.
+        return fork_stable_tarball_url(version, build_type, dsyms) if fork_prebuilt_published?(version)
+
+        ## Upstream publishes base versions only, so resolve the upstream base version.
         ## Only the URL is rewritten - the local tarball filename keeps the fork version so that it
         ## stays consistent with replace-rncore-version.js, which reads the version from package.json.
         version = version.sub(/-scatterlab\.\d+\z/, '')
