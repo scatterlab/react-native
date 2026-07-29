@@ -15,9 +15,9 @@ on:
         required: true
         type: string
       dist_tag:
-        description: 'npm dist-tag'
+        description: 'npm dist-tag. Keep `latest` while a single base line is supported - a separate `npm dist-tag add` cannot run here, because the OIDC token is minted inside `npm publish` and nowhere else, so whatever is passed here is the only tag this publish can move.'
         required: true
-        default: '0.86-stable'
+        default: 'latest'
         type: string
       dry_run:
         description: 'Pack and verify only, do not publish'
