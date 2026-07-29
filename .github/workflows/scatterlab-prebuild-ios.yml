@@ -1,19 +1,20 @@
 name: '[scatterlab] Build iOS prebuilt core'
 
-# Builds React.xcframework from THIS fork's sources and uploads it as workflow
-# artifacts. `.github/scatterlab/publish-prebuilt.sh` then cuts the
-# `prebuilt-ios-<version>` release from those artifacts.
+# Builds React.xcframework from THIS fork's sources and attaches it to a
+# `prebuilt-ios-<version>` release.
 #
-# Why the split: the org has an IP allow list and GitHub-hosted runners are not on it,
-# so every authenticated api.github.com WRITE from CI fails with HTTP 403. Artifact
-# upload goes to the Actions service and is unaffected, so the build stays here and the
-# release is cut from a machine whose IP is allowed.
+# Runners: the org has an IP allow list, and GitHub-hosted runners are not on it, so
+# every authenticated api.github.com write from a hosted runner fails with HTTP 403.
+# The org's self-hosted runners are on it, so the whole pipeline runs there:
+# `gaudi` for the macOS build, `arc-messenger-dev` for the Linux steps.
+# `.github/scatterlab/publish-prebuilt.sh` remains as a fallback that cuts the release
+# from a laptop out of the uploaded artifacts.
 #
-# Why this exists at all: with prebuilt enabled (the 0.86 default) every React* pod
-# ships headers only and the implementations come from the vendored xcframework, so an
-# iOS source change in the fork is a silent no-op unless the framework is rebuilt.
-# Measured on a bare 0.86.2 app: prebuilt = 52s clean build over 64 compile units,
-# source = 466s over 1522.
+# Why this exists: with prebuilt enabled (the 0.86 default) every React* pod ships
+# headers only and the implementations come from the vendored xcframework, so an iOS
+# source change in the fork is a silent no-op unless the framework is rebuilt. Measured
+# on a bare 0.86.2 app: prebuilt = 52s clean build over 64 compile units, source = 466s
+# over 1522.
 #
 # The version passed here must match the npm version consumers install, because
 # scripts/cocoapods/rncore.rb builds the asset URL from the installed package's version.
@@ -31,9 +32,12 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: arc-messenger-dev
+    permissions:
+      contents: write
     outputs:
       base: ${{ steps.v.outputs.base }}
+      tag: ${{ steps.v.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,15 +52,37 @@ jobs:
             exit 1
           fi
           echo "base=${VERSION%-scatterlab.*}" >> "$GITHUB_OUTPUT"
+          echo "tag=prebuilt-ios-$VERSION" >> "$GITHUB_OUTPUT"
 
           COMMITTED=$(node -p "require('./packages/react-native/package.json').version")
           if [ "$COMMITTED" != "$VERSION" ]; then
             echo "::warning::packages/react-native/package.json is at $COMMITTED but these artifacts are for $VERSION. They must match the version consumers install, or the URL rncore.rb builds will not resolve."
           fi
 
+      - name: Create the release
+        env:
+          # A release created with GITHUB_TOKEN fires no workflow runs, so the inherited
+          # upstream workflows cannot react to the new tag.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; assets will be added to it."
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "iOS prebuilt core for $VERSION" \
+            --notes "React.xcframework built from this fork for @scatterlab/react-native@$VERSION. Consumed by scripts/cocoapods/rncore.rb." \
+            --prerelease
+
   build:
     needs: prepare
-    runs-on: macos-15
+    runs-on: [self-hosted, gaudi]
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -64,11 +90,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-xcode
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      # The Xcode version is whatever the runner provides - deliberately not pinned with
+      # setup-xcode, which would require that exact Xcode to be installed here. Printed
+      # so a toolchain mismatch is diagnosable from the log rather than from a compile
+      # error 20 minutes in.
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          sw_vers
+          node --version
+
+      # This repo pins yarn 1 via packageManager, and a self-hosted runner has no reason
+      # to have it. corepack keeps that per-job instead of mutating a shared machine.
+      - name: Enable corepack
+        run: corepack enable
 
       - run: yarn install --frozen-lockfile
 
@@ -119,8 +158,8 @@ jobs:
           tar tzf "$TGZ" | head -1 | grep -q '^React.xcframework/' \
             || { echo "::error::tarball root is not React.xcframework/, React-Core-prebuilt.podspec expects it there"; exit 1; }
 
-          OUT="$RUNNER_TEMP/assets"
-          mkdir -p "$OUT"
+          OUT="$RUNNER_TEMP/assets-$FLAVOR"
+          rm -rf "$OUT"; mkdir -p "$OUT"
           # Mirrors the upstream Maven filenames so the .sha1 sidecar and the archive
           # layout stay drop-in compatible with rncore.rb.
           NAME="react-native-artifacts-${VERSION}-reactnative-core-$(echo "$FLAVOR" | tr '[:upper:]' '[:lower:]').tar.gz"
@@ -132,9 +171,60 @@ jobs:
           echo "dir=$OUT" >> "$GITHUB_OUTPUT"
           ls -l "$OUT"
 
-      - name: Upload the assets
+      - name: Upload the assets to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          DIR: ${{ steps.assets.outputs.dir }}
+        run: |
+          set -euo pipefail
+          # No --clobber: a replaced asset cannot be detected by consumers with a warm
+          # ~/Library/Caches/ReactNative entry, so they would keep the old framework
+          # forever. Publish a new -scatterlab.N instead of overwriting.
+          gh release upload "$TAG" "$DIR"/*
+
+      # Also kept as workflow artifacts so publish-prebuilt.sh can cut the release from
+      # a laptop if the release write ever fails here.
+      - name: Upload the assets as artifacts
         uses: actions/upload-artifact@v4
         with:
           name: prebuilt-ios-${{ inputs.version }}-${{ matrix.flavor }}
           path: ${{ steps.assets.outputs.dir }}
           if-no-files-found: error
+
+      # A shared runner: the SPM build products are several GB per flavour.
+      - name: Clean the build products
+        if: always()
+        working-directory: packages/react-native
+        run: rm -rf .build third-party
+
+  verify:
+    needs: [prepare, build]
+    runs-on: arc-messenger-dev
+    steps:
+      - name: Assert the release is consumable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name' | sort > /tmp/actual
+          for flavor in debug release; do
+            echo "react-native-artifacts-${VERSION}-reactnative-core-${flavor}.tar.gz"
+            echo "react-native-artifacts-${VERSION}-reactnative-core-${flavor}.tar.gz.sha1"
+          done | sort > /tmp/expected
+          # GitHub rewrites asset names containing unexpected characters, so compare
+          # exactly rather than trusting the upload.
+          diff /tmp/expected /tmp/actual
+
+          for flavor in debug release; do
+            URL="https://github.com/$REPO/releases/download/$TAG/react-native-artifacts-${VERSION}-reactnative-core-${flavor}.tar.gz"
+            # The literal gate from rncore.rb#artifact_exists.
+            CODE=$(curl -o /dev/null --silent -Iw '%{http_code}' -L "$URL")
+            [ "$CODE" = "200" ] || { echo "::error::$URL returned $CODE, rncore.rb would fall back to upstream Maven"; exit 1; }
+            SHA1=$(curl -sL "$URL.sha1")
+            [[ "$SHA1" =~ ^[a-fA-F0-9]{40}$ ]] || { echo "::error::$URL.sha1 is not 40 bare hex chars, integrity validation would be skipped"; exit 1; }
+          done
+          echo "release $TAG is consumable"
