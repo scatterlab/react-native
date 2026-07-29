@@ -1,11 +1,14 @@
 {
-  "name": "react-native",
-  "version": "0.87.0",
+  "name": "@scatterlab/react-native",
+  "version": "0.87.0-scatterlab.0",
   "description": "A framework for building native apps using React",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/react/react-native.git",
+    "url": "git+https://github.com/scatterlab/react-native.git",
     "directory": "packages/react-native"
   },
   "homepage": "https://reactnative.dev/",

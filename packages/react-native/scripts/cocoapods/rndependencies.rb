@@ -226,6 +226,8 @@ class ReactNativeDependenciesUtils
     end
 
     def self.release_tarball_url(version, build_type)
+        ## See the matching comment in rncore.rb#stable_tarball_url.
+        version = version.sub(/-scatterlab\.\d+\z/, '')
         ## You can use the `ENTERPRISE_REPOSITORY` ariable to customise the base url from which artifacts will be downloaded.
         ## The mirror's structure must be the same of the Maven repo the react-native core team publishes on Maven Central.
         maven_repo_url =
