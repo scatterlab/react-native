@@ -237,6 +237,8 @@ class ReactNativeDependenciesUtils
     end
 
     def self.release_tarball_urls(version, build_type)
+        ## See the matching comment in rncore.rb#stable_tarball_urls.
+        version = version.sub(/-scatterlab\.\d+\z/, '')
         group = "com/facebook/react"
 
         # Sample url from Maven:

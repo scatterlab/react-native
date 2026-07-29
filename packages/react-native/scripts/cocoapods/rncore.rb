@@ -355,6 +355,10 @@ class ReactNativeCoreUtils
     end
 
     def self.stable_tarball_urls(version, build_type, dsyms = false)
+        ## The scatterlab fork publishes no artifacts of its own; resolve the upstream base version.
+        ## Only the URL is rewritten - the local tarball filename keeps the fork version so that it
+        ## stays consistent with replace-rncore-version.js, which reads the version from package.json.
+        version = version.sub(/-scatterlab\.\d+\z/, '')
         group = "com/facebook/react"
         return ReactNativePodsUtils.maven_repository_urls().map { |maven_repo_url|
             # Sample url from Maven:
