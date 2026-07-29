@@ -44,6 +44,26 @@ cd ios && RCT_USE_PREBUILT_RNCORE=0 bundle exec pod install
 
 기기 로그에서 `SLIME`을 grep 한다. 각 줄은 `marked=`(조합 활성), `markedText=`, `sel=시작..끝`, `text=`를 찍는다.
 
+```bash
+xcrun devicectl list devices                    # 대상 기기의 identifier 확인
+xcrun devicectl device install app --device <id> <path>.app
+xcrun devicectl device process launch --device <id> --console --terminate-existing <bundle-id>
+```
+
+번들 식별자는 **위치 인자**다 — `--bundle-id` 플래그는 존재하지 않고, 붙이면 `Unknown option`으로 실패한다. `--console` 없이 띄우면 `NSLog`가 잡히지 않는다: `devicectl device console`은 별개 채널이라 앱 stdout이 오지 않는다.
+
+기기 Release 빌드는 자동 서명으로 통과한다 — 팀 wildcard 프로파일(`XK4C83B395.*`)에 개발 인증서가 없으면 Xcode가 그 프로파일을 갱신해 넣어주므로, App ID를 새로 등록하지 않고 임의 번들 식별자를 쓸 수 있다.
+
+```bash
+xcodebuild -workspace <ws>.xcworkspace -scheme <scheme> -configuration Release \
+  -destination "platform=iOS,id=<id>" -derivedDataPath dd-device -allowProvisioningUpdates \
+  PRODUCT_BUNDLE_IDENTIFIER=<고유 id> DEVELOPMENT_TEAM=XK4C83B395 CODE_SIGN_STYLE=Automatic build
+```
+
+Release로 빌드해야 JS 번들이 내장돼 Metro 없이 단독 실행된다. `NSLog`는 Release에서도 그대로 나온다. 표시명은 빌드 설정으로 못 바꾼다 — 템플릿 `Info.plist`에 `CFBundleDisplayName`이 명시돼 있어 `INFOPLIST_KEY_CFBundleDisplayName`이 무시되므로 plist를 직접 고친다.
+
+마운트 시점의 기준선(실측): controlled `TextInput` 하나당 `updateState` → `_setAttributedString` 한 쌍이 `marked=n`으로 찍힌다. **빈 값에서도 이 경로가 돈다** — 조합 중에 같은 경로가 `marked=Y`로 찍히는지가 cause 2 진단의 핵심이다.
+
 ### 무엇을 타이핑하고, 무엇이 결정되는가
 
 | 시나리오 | 볼 것 | 결정되는 것 |
