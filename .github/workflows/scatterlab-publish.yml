@@ -94,8 +94,15 @@ jobs:
             const fs = require("fs");
             const p = "packages/react-native/package.json";
             const before = fs.readFileSync(p, "utf8");
-            const after = before.replace(/("version":\s*")[^"]*(")/, `$1${process.env.VERSION}$2`);
-            if (after === before) throw new Error("version field not replaced");
+            let hit = false;
+            // Replace the first "version" occurrence only, so nested dependency
+            // ranges are untouched. Guard on the match, not on the text changing:
+            // re-publishing the version already committed is a valid no-op.
+            const after = before.replace(/("version":\s*")[^"]*(")/, (_m, a, b) => {
+              hit = true;
+              return a + process.env.VERSION + b;
+            });
+            if (!hit) throw new Error("version field not found in " + p);
             fs.writeFileSync(p, after);
           '
           node -p "require('./packages/react-native/package.json').version"
