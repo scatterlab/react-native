@@ -28,6 +28,15 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # `id-token: write` lets the npm CLI mint the OIDC token for npm Trusted
+    # Publishing, so no long-lived npm token is needed. npm matches the
+    # `workflow_ref` claim against the top-level workflow filename and allows
+    # only ONE trusted publisher per package, so `npm publish` must keep running
+    # from this file directly - do not move it into a reusable or composite
+    # workflow.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -125,7 +134,8 @@ jobs:
         if: ${{ !inputs.dry_run }}
         working-directory: packages/react-native
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TGZ: ${{ steps.pack.outputs.tgz }}
           DIST_TAG: ${{ inputs.dist_tag }}
-        run: npm publish "$TGZ" --tag "$DIST_TAG" --access public --registry=https://registry.npmjs.org
+        run: |
+          npm --version  # Trusted Publishing needs >= 11.5.1
+          npm publish "$TGZ" --tag "$DIST_TAG" --access public --registry=https://registry.npmjs.org
