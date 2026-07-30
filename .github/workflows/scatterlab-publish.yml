@@ -1,6 +1,13 @@
 name: '[scatterlab] Publish fork to npm'
 
-# Publishes packages/react-native from this fork as @scatterlab/react-native.
+# Publishes packages/react-native from this fork as @scatterlab/react-native to
+# npmjs.org AND to GitHub Packages.
+#
+# Both registries get the same tarball. GitHub Packages exists because yarn maps
+# a registry per *scope*, not per package: consumers that already point
+# `@scatterlab` at npm.pkg.github.com (for @scatterlab/api-helper, which is only
+# published there) cannot reach an npmjs-only package in the same scope, and
+# would have to fall back to a raw tarball URL descriptor.
 #
 # Only the npm version carries the fork suffix. ReactAndroid/gradle.properties
 # VERSION_NAME and the @react-native/* sibling pins must stay on the upstream
@@ -19,6 +26,15 @@ on:
         required: true
         default: 'latest'
         type: string
+      registries:
+        description: 'Which registries to publish to. Neither registry allows republishing an existing version, so use `ghp` or `npm` to backfill a version that only one of them already has.'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - npm
+          - ghp
       dry_run:
         description: 'Pack and verify only, do not publish'
         required: true
@@ -37,6 +53,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      # GitHub Packages publish uses the job's GITHUB_TOKEN.
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -130,8 +148,8 @@ jobs:
           BASE: ${{ steps.v.outputs.base }}
         run: .github/scatterlab/verify-tarball.sh "$TGZ" "$BASE"
 
-      - name: Publish
-        if: ${{ !inputs.dry_run }}
+      - name: Publish to npmjs
+        if: ${{ !inputs.dry_run && inputs.registries != 'ghp' }}
         working-directory: packages/react-native
         env:
           TGZ: ${{ steps.pack.outputs.tgz }}
@@ -139,3 +157,24 @@ jobs:
         run: |
           npm --version  # Trusted Publishing needs >= 11.5.1
           npm publish "$TGZ" --tag "$DIST_TAG" --access public --registry=https://registry.npmjs.org
+
+      - name: Publish to GitHub Packages
+        if: ${{ !inputs.dry_run && inputs.registries != 'npm' }}
+        working-directory: packages/react-native
+        env:
+          TGZ: ${{ steps.pack.outputs.tgz }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The npmjs publish above authenticates through the .npmrc that
+          # setup-node wrote; do not touch it. A throwaway user config carries the
+          # GitHub Packages credential for this step only.
+          NPMRC="$RUNNER_TEMP/ghp.npmrc"
+          umask 077
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN" > "$NPMRC"
+          # No --access: on GitHub Packages the package inherits the repository's
+          # visibility, and passing it makes npm reject the publish.
+          NPM_CONFIG_USERCONFIG="$NPMRC" npm publish "$TGZ" \
+            --tag "$DIST_TAG" \
+            --registry=https://npm.pkg.github.com
