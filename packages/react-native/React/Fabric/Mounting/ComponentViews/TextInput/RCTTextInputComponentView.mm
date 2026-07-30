@@ -117,7 +117,15 @@ static void RCTScatterlabIMEProbe(const char *where, id<RCTBackedTextInputViewPr
     _ignoreNextTextInputCall = NO;
     _comingFromJS = NO;
     _didMoveToWindow = NO;
-    _originalTypingAttributes = [_backedTextInputView.typingAttributes copy];
+    // We also strip a fully transparent NSBackgroundColor and the EventEmitter key from the
+    // backing view so UIKit will draw the IME composition underline, so comparisons have to
+    // treat their absence as equal to their presence. RN emits a clear background for every
+    // TextInput unconditionally (BaseTextInputProps); the emitter is added in
+    // -updateEventEmitter: below, once it exists.
+    NSMutableDictionary<NSAttributedStringKey, id> *insensitiveAttributes =
+        [_backedTextInputView.typingAttributes mutableCopy];
+    insensitiveAttributes[NSBackgroundColorAttributeName] = UIColor.clearColor;
+    _originalTypingAttributes = [insensitiveAttributes copy];
     _previousContentSize = CGSizeZero;
 
     [self addSubview:_backedTextInputView];
@@ -134,7 +142,16 @@ static void RCTScatterlabIMEProbe(const char *where, id<RCTBackedTextInputViewPr
   NSMutableDictionary<NSAttributedStringKey, id> *defaultAttributes =
       [_backedTextInputView.defaultTextAttributes mutableCopy];
 
-  defaultAttributes[RCTAttributedStringEventEmitterKey] = RCTWrapEventEmitter(_eventEmitter);
+  id eventEmitterAttribute = RCTWrapEventEmitter(_eventEmitter);
+  defaultAttributes[RCTAttributedStringEventEmitterKey] = eventEmitterAttribute;
+
+  // The strip removes this key from the backing view, so equality checks must treat its
+  // absence as equal to it. Two wrappers of the same emitter compare equal: the NSData
+  // holds the pointer's bytes, and -isEqual: compares content.
+  NSMutableDictionary<NSAttributedStringKey, id> *insensitiveAttributes =
+      [_originalTypingAttributes mutableCopy];
+  insensitiveAttributes[RCTAttributedStringEventEmitterKey] = eventEmitterAttribute;
+  _originalTypingAttributes = [insensitiveAttributes copy];
 
   _backedTextInputView.defaultTextAttributes = defaultAttributes;
 }
@@ -847,8 +864,27 @@ static void RCTScatterlabIMEProbe(const char *where, id<RCTBackedTextInputViewPr
                                                            toPosition:_backedTextInputView.selectedTextRange.start];
 
     NSUInteger samplePoint = offsetStart == 0 ? 0 : offsetStart - 1;
-    _backedTextInputView.typingAttributes = [_backedTextInputView.attributedText attributesAtIndex:samplePoint
-                                                                                    effectiveRange:NULL];
+    NSDictionary<NSAttributedStringKey, id> *sampled =
+        [_backedTextInputView.attributedText attributesAtIndex:samplePoint effectiveRange:NULL];
+
+    // The attributed text is built by RN and carries the attributes that stop UIKit drawing
+    // the IME composition underline. Resampling it verbatim puts them straight back into
+    // typingAttributes, which is why a controlled input showed the underline on the first
+    // character only: every keystroke round-trips through JS, lands in
+    // -_setAttributedString:, and ends here. Strip them again, on the same terms as
+    // RCTUITextField/RCTUITextView: only no-op defaults, never user-specified values.
+    NSMutableDictionary<NSAttributedStringKey, id> *typingAttributes = [sampled mutableCopy];
+    [typingAttributes removeObjectForKey:RCTAttributedStringEventEmitterKey];
+    NSShadow *shadow = typingAttributes[NSShadowAttributeName];
+    if (shadow && CGSizeEqualToSize(shadow.shadowOffset, CGSizeZero) && shadow.shadowBlurRadius == 0) {
+      [typingAttributes removeObjectForKey:NSShadowAttributeName];
+    }
+    UIColor *backgroundColor = typingAttributes[NSBackgroundColorAttributeName];
+    if (backgroundColor && CGColorGetAlpha(backgroundColor.CGColor) == 0) {
+      [typingAttributes removeObjectForKey:NSBackgroundColorAttributeName];
+    }
+
+    _backedTextInputView.typingAttributes = typingAttributes;
   }
 }
 
