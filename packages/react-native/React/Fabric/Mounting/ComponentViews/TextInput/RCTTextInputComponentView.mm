@@ -487,6 +487,16 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
     }
 
     if (allowedLength <= 0) {
+      // An in-progress syllable occupies real characters here, so once the field sits at the
+      // limit every composition update is rejected and the syllable can never complete -
+      // Korean ㅇ+ㅏ, Japanese n+i and Pinyin all stall. UIKit delivers those updates as a
+      // single-unit insertion at the caret, so let that one case through and settle the
+      // length in -textInputDidChange instead.
+      BOOL isSingleUnitInsertionAtEnd = range.length == 0 && text.length == 1 &&
+          range.location == _backedTextInputView.attributedText.string.length;
+      if (isSingleUnitInsertionAtEnd) {
+        return text;
+      }
       return nil;
     }
 
@@ -512,12 +522,51 @@ static NSSet<NSNumber *> *returnKeyTypesSet;
     return;
   }
 
+  // Settles the overflow that -textInputShouldChangeText:inRange: let through so a
+  // composition could finish. Runs before -_updateState so JS never observes a value
+  // longer than maxLength.
+  [self _enforceMaxLengthAfterComposition];
+
   [self _updateState];
 
   if (_eventEmitter) {
     const auto &textInputEventEmitter = static_cast<const TextInputEventEmitter &>(*_eventEmitter);
     textInputEventEmitter.onChange([self _textInputMetrics]);
   }
+}
+
+// Trims a field that is over maxLength, but only once composition has settled: a Korean
+// jamo is absorbed into the preceding syllable so the length comes back on its own and
+// nothing is trimmed, while a plain overflowing keystroke is trimmed straight away, which
+// is what stock behaviour already did. Never trims while composing - setting attributedText
+// mid-composition destroys the marked text.
+- (void)_enforceMaxLengthAfterComposition
+{
+  const auto &props = static_cast<const TextInputProps &>(*_props);
+  if (props.maxLength >= std::numeric_limits<int>::max() || _backedTextInputView.markedTextRange) {
+    return;
+  }
+
+  NSAttributedString *attributedText = _backedTextInputView.attributedText;
+  NSInteger limit = props.maxLength;
+  if ((NSInteger)attributedText.length <= limit) {
+    return;
+  }
+
+  // Do not split a character that takes more than 16 bits, matching the truncation above.
+  NSRange lastCharacter = [attributedText.string rangeOfComposedCharacterSequenceAtIndex:limit - 1];
+  if (lastCharacter.location + lastCharacter.length > (NSUInteger)limit) {
+    limit = lastCharacter.location;
+  }
+
+  // _comingFromJS keeps the nested delegate callbacks that assigning attributedText
+  // triggers on multiline inputs from emitting a second onChange for the same edit.
+  _comingFromJS = YES;
+  _backedTextInputView.attributedText = [attributedText attributedSubstringFromRange:NSMakeRange(0, limit)];
+  UITextPosition *end = _backedTextInputView.endOfDocument;
+  [_backedTextInputView setSelectedTextRange:[_backedTextInputView textRangeFromPosition:end toPosition:end]
+                             notifyDelegate:NO];
+  _comingFromJS = NO;
 }
 
 - (void)textInputDidChangeSelection
