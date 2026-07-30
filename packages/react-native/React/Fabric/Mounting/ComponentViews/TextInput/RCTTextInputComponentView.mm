@@ -481,8 +481,22 @@ static void RCTScatterlabIMEProbe(const char *where, id<RCTBackedTextInputViewPr
     }
   }
 
+  // Korean never sets markedTextRange, so the only thing that can distinguish an
+  // in-progress syllable from a real insertion is the shape of the change itself. Log the
+  // arguments the maxLength arithmetic below actually consumes.
+  NSLog(@"SLIME shouldChangeText.args range=%ld..%ld incoming=%@ curLen=%lu maxLength=%d",
+        (long)range.location,
+        (long)range.length,
+        text,
+        (unsigned long)_backedTextInputView.attributedText.string.length,
+        (int)props.maxLength);
+
   if (props.maxLength < std::numeric_limits<int>::max()) {
     NSInteger allowedLength = props.maxLength - _backedTextInputView.attributedText.string.length + range.length;
+    NSLog(@"SLIME maxLength.decision allowedLength=%ld incomingLen=%lu verdict=%@",
+          (long)allowedLength,
+          (unsigned long)text.length,
+          allowedLength <= 0 ? @"REJECTED" : (allowedLength > (NSInteger)text.length ? @"passthrough" : @"truncated"));
 
     if (allowedLength > 0 && text.length > allowedLength) {
       // make sure unicode characters that are longer than 16 bits (such as emojis) are not cut off
