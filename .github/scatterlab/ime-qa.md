@@ -21,11 +21,23 @@
 | | 관측 | 의미 |
 | --- | --- | --- |
 | **F1** | controlled 단일행에서 빠른 영문 타이핑·자동수정 중 캐럿이 점프하거나 선택이 붕괴 | 7a를 그대로 쓸 수 없다. 상류 이슈 #44157의 증상이며, 대응은 7b가 **아니라** 등가성 비교를 stripped 키에 둔감하게 만드는 쪽이다 |
-| **F2** | JS가 쓴 텍스트 안/뒤에 캐럿을 두고 조합을 시작했을 때 밑줄이 여전히 없음 | 7a만으로는 부족하다. 7b로 답하면 F1을 부른다 |
+| **F2** | controlled 입력에서 두 번째 글자부터 밑줄이 사라짐 | **관측됐고 해소됐다.** 7a만 실은 `-scatterlab.4`에서 재현(uncontrolled는 정상, controlled만 첫 글자), `-scatterlab.5`의 7b+둔감화로 해결. 다시 나타나면 `-_updateTypingAttributes`의 재strip이 빠진 것이다 |
 | **F3** | `textShadowColor` + offset/radius 0 인 텍스트, 또는 `DynamicColorIOS` 배경을 가진 텍스트의 렌더가 변함 | no-op 판정 술어가 오분류하고 있다 |
 | **F4** | 롤아웃 후 Sentry에 `NSRangeException` / `NSMutableRLEArray objectAtIndex:effectiveRange:`가 새로 나타남 | 별개 크래시(상류 #55950 클램프로도 재현 보고됨). 7a와 무관하지만 같은 창에서 관측된다 |
 
-**한국어에는 가시적 변화가 없는 것이 정상이다.** 상류 PR의 테스트 플랜 자체가 "Korean: no underline expected (inline replacement)"라고 적고 있고, 프로덕션 보고 3건은 모두 일본 시장이다. 한국어에서 보이는 증상(자모 유실·조기 확정·캐럿 점프)은 아래 cause 2의 영역이다.
+**한국어에는 가시적 변화가 없는 것이 정상이다.** 상류 PR의 테스트 플랜 자체가 "Korean: no underline expected (inline replacement)"라고 적고 있고, 프로덕션 보고 3건은 모두 일본 시장이다. 그리고 실기기 계측으로 확정됐다 — **한글 입력은 `markedTextRange`를 전혀 설정하지 않는다**(아래 §2). 따라서 마크드 텍스트를 전제로 한 수정은 한국어에 구조적으로 닿지 않는다.
+
+### 3-앱 대조 구성
+
+밑줄 판정은 대조군 없이는 성립하지 않는다("원래도 보였는지"를 알 수 없다). 기기에 세 앱을 같은 화면으로 올려 비교한다.
+
+| 앱 | RN | 담긴 것 |
+| --- | --- | --- |
+| `Stock 0.86.2` | 상류 `react-native@0.86.2` | 없음 — 대조군 |
+| `RN Fork 4` | `@scatterlab/react-native@0.86.2-scatterlab.4` | 7a만 |
+| `IME Probe` | `.5` 소스빌드(`RCT_USE_PREBUILT_RNCORE=0`) | 7a+7b+둔감화 + `SLIME` 계측 |
+
+`Stock → Fork 4`가 7a 단독 효과를, `Fork 4 → IME Probe`가 7b+둔감화 효과를 분리해 보여준다. 대조군을 만들 때는 작동하는 트리를 복제해 `react-native` 한 패키지만 갈아끼우고, `7a strip` 문자열 카운트가 0인지 확인한다 — 0이 아니면 대조군이 아니다.
 
 ## 2. cause 2 실측 — `markedTextRange` 생애 관측
 
