@@ -201,6 +201,34 @@ hermesCommand.value("../../node_modules/react-native/sdks/hermesc/%OS-BIN%/herme
 ```
 0.86.2에 존재하지 않는 경로다. RNGP의 hermesc 탐색은 `react.hermesCommand`가 설정돼 있으면 **즉시 반환하고 fallthrough 하지 않으므로**(`PathUtils.kt:133-172`) 새 위치로 내려가지 못한다. 단순 삭제도 불가 — `react.root` 기본값이 `packages/app`이고 `packages/app/node_modules`에는 `.cache`/`.generated`뿐이라 상대경로가 빗나간다. 고칠 값: `../../node_modules/hermes-compiler/hermesc/%OS-BIN%/hermesc`
 
+## 싣고 있는 IME 수정
+
+상류 PR [56082](https://github.com/react/react-native/pull/56082)은 7개 root cause를 열거하지만, 그중 채택한 것은 **cause 7a 하나**이고 여기에 **fork 고유의 두 조각**을 더한다. 나머지 6개는 기각했다 — 근거는 커밋 `2c6650baa8c` 본문.
+
+| 조각 | 파일 | 하는 일 |
+| --- | --- | --- |
+| 7a | `Libraries/Text/TextInput/{Multiline/RCTUITextView,Singleline/RCTUITextField}.mm` | `setDefaultTextAttributes:`에서 EventEmitter 키·no-op NSShadow·투명 NSBackgroundColor를 벗겨 UIKit이 조합 밑줄을 그리게 한다 |
+| 7b | `React/Fabric/.../RCTTextInputComponentView.mm` `-_updateTypingAttributes` | 같은 조건으로 재strip |
+| 둔감화 | 같은 파일 `-initWithFrame:` / `-updateEventEmitter:` | 벗긴 키를 `_originalTypingAttributes`에 넣어 등가성 비교가 그 부재를 존재와 같게 본다 |
+
+**7b와 둔감화는 한 쌍이고 따로 넣으면 안 된다.** 7b 단독은 등가성을 영구히 깨뜨려 `-_setAttributedString:`의 early return을 무력화하고, 그러면 매 키스트로크마다 `attributedText`가 재설정돼 상류 [#44157](https://github.com/react/react-native/issues/44157) 캐럿 점프가 재발한다. 둔감화가 그 전제를 없앤다 — `RCTIsAttributeEffectivelySame`이 `attributes[key] ?: insensitiveAttributes[key]`로 대체 비교하므로, 벗긴 키를 그 집합에 넣으면 양쪽이 계속 "같다"로 판정된다.
+
+### 왜 7a만으로는 부족한가 (실기기 관측)
+
+iPhone XR / iOS 18.7.9에서 7a만 실은 빌드(`0.86.2-scatterlab.4`):
+
+- **uncontrolled** multiline — 밑줄이 계속 보인다
+- **controlled** multiline — **첫 글자에만** 보이고 두 번째부터 사라진다
+
+controlled는 키스트로크마다 JS를 왕복해 `-_setAttributedString:`을 거치고 그 끝이 `-_updateTypingAttributes`인데, 이 메서드가 RN이 만든 `attributedText`에서 속성을 그대로 재샘플링해 벗겨둔 것을 즉시 다시 심는다. uncontrolled는 그 왕복이 없어 살아남았던 것이다. 그래서 7b가 필요하다.
+
+### 무엇을 고치지 못하는가
+
+- **한국어에는 가시적 변화가 없다.** 실기기 계측에서 한글 입력은 `markedTextRange`를 **전혀 설정하지 않는다**(`marked=n`, 음절을 본문에 직접 커밋하며 교체). 마크드 텍스트가 없으므로 밑줄도 없고, `markedTextRange`에 게이트된 수정은 한국어에 구조적으로 무력하다. 효과 범위는 일본어·중국어다.
+- **글자수 제한에서 조합이 막히는 것은 iOS 플랫폼 동작이고 결함이 아니다**(다른 앱도 동일). 조합 중인 글자가 `text`의 문자 수를 차지하므로 상한에서 `allowedLength`가 0이 되어 키스트로크가 폐기된다. 고치면 오히려 플랫폼 관례에서 벗어난다.
+
+검증 절차와 회귀 판정 기준은 [ime-qa.md](ime-qa.md).
+
 ## iOS prebuilt core를 우리가 만든다
 
 0.86에서 iOS prebuilt는 **opt-out 기본값**이고, prebuilt가 켜지면 `podspec_sources`가 헤더만 반환해 **모든 React\* pod의 구현이 `React.xcframework`에서 온다**(81개 podspec 중 69개가 이 스위치를 탄다). 실측: `RCTUITextView` / `RCTUITextField` / `RCTTextInputComponentView` 세 클래스 모두 상류 0.86.2 아티팩트의 Mach-O에 심볼로 존재한다(`nm -gU React`). 즉 **iOS 소스 수정은 prebuilt가 켜진 채로는 조용히 무효**다.
