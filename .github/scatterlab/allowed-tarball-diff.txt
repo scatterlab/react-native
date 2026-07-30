@@ -10,3 +10,4 @@ scripts/cocoapods/rndependencies.rb
 # effect through the fork's own prebuilt release - see README.md.
 Libraries/Text/TextInput/Multiline/RCTUITextView.mm
 Libraries/Text/TextInput/Singleline/RCTUITextField.mm
+React/Fabric/Mounting/ComponentViews/TextInput/RCTTextInputComponentView.mm
