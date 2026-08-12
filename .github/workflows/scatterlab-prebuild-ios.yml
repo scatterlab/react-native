@@ -80,7 +80,11 @@ jobs:
 
   build:
     needs: prepare
-    runs-on: [self-hosted, gaudi]
+    # zeta 의 네이티브 출고가 쓰는 러너와 같은 라벨이다(deploy-native.yml). gaudi 보다 빠른
+    # 것도 있지만, 더 중요한 이유는 Xcode 를 핀하지 않는 이 워크플로에서 프레임워크의 Swift
+    # module interface 가 **앱을 빌드하는 그 Xcode** 에서 나오게 되는 것이다 — 호환성 계약이
+    # 자동으로 맞는다.
+    runs-on: [self-hosted, zeta-app-builder]
     permissions:
       contents: write
     strategy:
