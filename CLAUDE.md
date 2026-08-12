@@ -55,7 +55,9 @@ gh workflow run scatterlab-prebuild-ios.yml --repo scatterlab/react-native --ref
 
 ## CI 러너
 
-맥은 `[self-hosted, gaudi]`, 리눅스는 `arc-messenger-dev`. **GitHub-hosted 러너로는 릴리스를 만들 수 없다** — org IP allow list가 인증된 `api.github.com` 쓰기를 403으로 막는다(아티팩트 업로드는 Actions 서비스라 통과). `publish-prebuilt.sh`가 그 상황용 fallback.
+맥은 `[self-hosted, zeta-app-builder]`, 리눅스는 `arc-messenger-dev`. **GitHub-hosted 러너로는 릴리스를 만들 수 없다** — org IP allow list가 인증된 `api.github.com` 쓰기를 403으로 막는다(아티팩트 업로드는 Actions 서비스라 통과). `publish-prebuilt.sh`가 그 상황용 fallback.
+
+맥 러너는 zeta의 네이티브 출고(`zeta-frontend`의 `deploy-native.yml`)와 같은 라벨을 쓴다. gaudi보다 빠른 것도 있지만, 본질적인 이유는 Xcode를 핀하지 않는 정책과 맞물린다 — 프레임워크의 Swift module interface가 **앱을 빌드하는 그 Xcode**에서 나와야 호환성 계약이 자동으로 성립한다. 두 러너의 유저명은 모두 `scatterlab`이라 절대 경로 전제도 그대로 유효하다.
 
 self-hosted에서만 나타나는 함정:
 
