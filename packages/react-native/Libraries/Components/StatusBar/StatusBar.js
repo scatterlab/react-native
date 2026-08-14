@@ -249,10 +249,21 @@ class StatusBar extends React.Component<StatusBarProps> {
    *
    * @platform android
    */
-  static currentHeight: ?number =
-    Platform.OS === 'android'
-      ? NativeStatusBarManagerAndroid.getConstants().HEIGHT
+  // A class field would read the native constant while this module is being loaded.
+  // Under the New Architecture the TurboModule constants are only valid once the module
+  // instance exists, so that read crashes the app on Android during startup — and
+  // `import {StatusBar} from 'react-native'` alone is enough to trigger it (that is how
+  // @react-navigation/native-stack uses it). See
+  // https://github.com/react/react-native/issues/41663.
+  //
+  // As a getter this is evaluated when the value is actually read. The JS spec wrapper
+  // does not cache a failed lookup, so a later read still returns the real height; the
+  // optional chaining covers callers that read in between.
+  static get currentHeight(): ?number {
+    return Platform.OS === 'android'
+      ? NativeStatusBarManagerAndroid.getConstants()?.HEIGHT
       : null;
+  }
 
   // Provide an imperative API as static functions of the component.
   // See the corresponding prop for more detail.

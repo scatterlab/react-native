@@ -11,3 +11,13 @@ scripts/cocoapods/rndependencies.rb
 Libraries/Text/TextInput/Multiline/RCTUITextView.mm
 Libraries/Text/TextInput/Singleline/RCTUITextField.mm
 React/Fabric/Mounting/ComponentViews/TextInput/RCTTextInputComponentView.mm
+
+# `StatusBar.currentHeight` as a lazy getter instead of a class field, see
+# https://github.com/react/react-native/issues/41663. Under the New Architecture the
+# TurboModule constants are only valid once the module instance exists, so evaluating
+# them while this module is being loaded crashes the app on Android - and `import
+# {StatusBar} from 'react-native'` alone is enough to trigger it (that is how
+# @react-navigation/native-stack uses it). The .d.ts is generated from the Flow source
+# at build time, so it differs as well.
+Libraries/Components/StatusBar/StatusBar.js
+types_generated/Libraries/Components/StatusBar/StatusBar.d.ts
