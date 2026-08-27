@@ -236,9 +236,16 @@ const ScrollViewStickyHeader: component(
     // add the event listener
     let animatedListenerId;
     if (isFabric) {
-      animatedListenerId = newAnimatedTranslateY.addListener(
-        animatedValueListener,
-      );
+      // Only AnimatedValue starts listening to native value updates when a listener is
+      // added; AnimatedInterpolation/AnimatedAddition do not override `addListener`, so a
+      // listener on the interpolated node is never called while the value is driven
+      // natively. That silently disables the ShadowTree commit below, which in turn makes
+      // `measure()` (and the Pressability responder region derived from it) unaware of the
+      // sticky translation: on Android a tap with any finger movement gets cancelled.
+      // Subscribe to the scroll value instead and read the interpolated value on each update.
+      animatedListenerId = scrollAnimatedValue.addListener(() => {
+        animatedValueListener({value: newAnimatedTranslateY.__getValue()});
+      });
     }
 
     setAnimatedTranslateY(newAnimatedTranslateY);
@@ -246,7 +253,7 @@ const ScrollViewStickyHeader: component(
     // clean up the event listener and timer
     return () => {
       if (animatedListenerId) {
-        newAnimatedTranslateY.removeListener(animatedListenerId);
+        scrollAnimatedValue.removeListener(animatedListenerId);
       }
       if (translateYDebounceTimer.current != null) {
         clearTimeout(translateYDebounceTimer.current);
