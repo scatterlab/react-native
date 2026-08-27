@@ -21,3 +21,12 @@ React/Fabric/Mounting/ComponentViews/TextInput/RCTTextInputComponentView.mm
 # at build time, so it differs as well.
 Libraries/Components/StatusBar/StatusBar.js
 types_generated/Libraries/Components/StatusBar/StatusBar.d.ts
+
+# Sticky headers commit their animated translateY into the Fabric ShadowTree so that
+# `measure()` - and the Pressability responder region derived from it - knows where the
+# header actually is. The listener driving that commit was attached to an interpolated
+# node, which never receives native value updates (only `AnimatedValue` starts that
+# subscription), so on Android a tap with any finger movement inside a sticky header was
+# cancelled. This subscribes to the scroll value instead. No .d.ts entry - the file
+# exports no types.
+Libraries/Components/ScrollView/ScrollViewStickyHeader.js
