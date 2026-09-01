@@ -30,3 +30,12 @@ types_generated/Libraries/Components/StatusBar/StatusBar.d.ts
 # cancelled. This subscribes to the scroll value instead. No .d.ts entry - the file
 # exports no types.
 Libraries/Components/ScrollView/ScrollViewStickyHeader.js
+
+# The attributed-string equivalence check that -_setAttributedString: early-returns on.
+# Stripping attributes for the IME underline splits the backing view's string into runs
+# that RN's own string does not have, and the run-boundary check rejected that before the
+# insensitive-attribute comparison could absorb it - so a controlled TextInput rewrote the
+# same text on every keystroke, moving the caret. Keyboards that run out of process
+# (Simeji and other third-party IMEs) treat that as the document moving under them and
+# drop the composition. See README.md.
+ReactCommon/react/renderer/textlayoutmanager/platform/ios/react/renderer/textlayoutmanager/RCTAttributedTextUtils.mm

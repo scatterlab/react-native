@@ -577,6 +577,18 @@ static BOOL RCTIsAttributeEffectivelySame(
     return RCTIsParagraphStyleEffectivelySame(attribute1, attribute2, baseTextAttributes);
   }
 
+  // A fully transparent background paints nothing, so two of them are the same however they were
+  // built. The strip that makes UIKit draw the IME composition underline is itself gated on alpha
+  // 0, and the colour left behind for comparison need not share a colour space with the one RN
+  // emits (UIColor.clearColor is gray, BaseTextInputProps emits sRGB) - -isEqual: would say no.
+  if ([attributeKey isEqualToString:NSBackgroundColorAttributeName] && [attribute1 isKindOfClass:[UIColor class]] &&
+      [attribute2 isKindOfClass:[UIColor class]]) {
+    if (CGColorGetAlpha(((UIColor *)attribute1).CGColor) == 0 &&
+        CGColorGetAlpha(((UIColor *)attribute2).CGColor) == 0) {
+      return YES;
+    }
+  }
+
   // Otherwise rely on built-in comparison
   return [attribute1 isEqual:attribute2];
 }
@@ -607,12 +619,14 @@ BOOL RCTIsAttributedStringEffectivelySame(
                                                       NSDictionary<NSAttributedStringKey, id> *text2Attributes,
                                                       NSRange text2Range,
                                                       BOOL *text2Stop) {
-                                                    if (!NSEqualRanges(text1Range, text2Range)) {
-                                                      areAttributesSame = NO;
-                                                      *text1Stop = YES;
-                                                      *text2Stop = YES;
-                                                      return;
-                                                    }
+                                                    // text2 may be split into more runs than text1 over the same
+                                                    // characters: any attribute we deliberately keep out of the
+                                                    // backing view lands on newly typed text only, which starts a new
+                                                    // run. Requiring identical run boundaries fails before the
+                                                    // insensitive-attribute comparison below can absorb that, so the
+                                                    // boundaries are not compared. text2Range is clipped to
+                                                    // text1Range, and every attribute of both sides is still compared
+                                                    // for each overlapping fragment.
 
                                                     // Compare every attribute in text1 to the corresponding attribute
                                                     // in text2, or the set of insensitive attributes if not present
