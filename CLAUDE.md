@@ -7,9 +7,10 @@
 zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 fork. 첫 화물은 iOS CJK IME 조합 밑줄 수정이지만, 목적은 그 수정 자체가 아니라 파이프라인이다.
 
 - 상류: `react/react-native` (`facebook/react-native`는 301 alias). remote `upstream`
-- 작업 브랜치: **`scatterlab/0.86.2`** (기본 브랜치, 태그 `v0.86.2`에서 분기)
-- 계측 브랜치: `scatterlab/0.86.2-ime-probe` — `SLIME` 로그가 붙은 실험용. **배포 대상 아님**
-- 산출물: npm `@scatterlab/react-native@0.86.2-scatterlab.N` + GitHub Release `prebuilt-ios-<version>`
+- 작업 브랜치: **`scatterlab/0.87.1`** (기본 브랜치, 태그 `v0.87.1`에서 분기)
+- 지난 라인: `scatterlab/0.86.2`, `scatterlab/0.87.0` — 남겨두지만 새 작업은 올리지 않는다
+- 계측 브랜치: `scatterlab/0.86.2-ime-probe` — `SLIME` 로그가 붙은 실험용. 0.86.2 라인에 묶여 있고 **배포 대상 아님**
+- 산출물: npm `@scatterlab/react-native@0.87.1-scatterlab.N` + GitHub Release `prebuilt-ios-<version>`
 - 소비: npm alias — `"react-native": "npm:@scatterlab/react-native@<version>"`
 
 `main`은 상류 동기화용으로만 둔다. **`main`에 push하지 않는다** — 상류 워크플로가 발화한다.
@@ -22,7 +23,7 @@ zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 
 | `@react-native/*` sibling 7개 exact 핀 변경 | `@react-native/codegen@<fork버전>`을 npm에서 찾다 install 실패. 8개 패키지를 다 배포해야 함 |
 | `scripts/releases/set-version.js` / `set-rn-artifacts-version.js` 실행 | 전자는 sibling 범위를 전부 재작성, 후자는 `VERSION_NAME`을 재작성. 둘 다 위 두 항을 정확히 깨뜨린다 |
 | `package.json`의 `bin` 변경 | zeta의 codepush 배포가 `node_modules/.bin/react-native` 심링크를 복사한다 |
-| `v*` 태그 생성 | 상류 `publish-npm.yml`의 글롭 `v0.*.*`가 `v0.86.2-무엇이든`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없다. 태그는 `prebuilt-ios-` / `sl-` 처럼 `v`로 시작하지 않게 |
+| `v*` 태그 생성 | 상류 `publish-npm.yml`의 글롭 `v0.*.*`가 `v0.87.1-무엇이든`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없다. 태그는 `prebuilt-ios-` / `sl-` 처럼 `v`로 시작하지 않게 |
 | 버전 접미사에 대시 2개 | `-scatterlab.N` 고정. fork 접미사 제거 정규식이 greedy하다 |
 | 릴리스 에셋 clobber | warm `~/Library/Caches/ReactNative`를 가진 개발자가 낡은 xcframework를 영구히 쓴다. 새 `-scatterlab.N`을 낸다 |
 
@@ -31,8 +32,8 @@ zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 
 ## 배포
 
 ```bash
-gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scatterlab/0.86.2 \
-  -f version=0.86.2-scatterlab.N -f dist_tag=latest -f dry_run=false
+gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
+  -f version=0.87.1-scatterlab.N -f dist_tag=latest -f dry_run=false
 ```
 
 - 인증은 **npm Trusted Publishing (OIDC)** — 토큰 없음. `permissions: id-token: write` + `node-version: 24`(핀 제거 금지, `ubuntu-latest` 기본 npm 10.9.8은 요구치 11.5.1 미달)
@@ -45,8 +46,8 @@ gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scat
 prebuilt가 기본(0.84+)이고, 켜지면 **모든 React\* pod의 구현이 `React.xcframework`에서 온다**. 즉 **iOS 소스 수정은 prebuilt가 켜진 채로는 조용히 무효**다. 그래서 자체 빌드·호스팅한다.
 
 ```bash
-gh workflow run scatterlab-prebuild-ios.yml --repo scatterlab/react-native --ref scatterlab/0.86.2 \
-  -f version=0.86.2-scatterlab.N
+gh workflow run scatterlab-prebuild-ios.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
+  -f version=0.87.1-scatterlab.N
 ```
 
 **순서 제약**: `FORK_REQUIRES_OWN_PREBUILT = true`이므로 **prebuilt 릴리스가 npm보다 먼저** 있어야 한다. 없으면 소비자 `pod install`이 abort한다(그게 의도다 — 조용히 패치 없는 프레임워크를 출고하는 것보다 낫다).
@@ -68,6 +69,8 @@ self-hosted에서만 나타나는 함정:
 - Xcode를 핀하지 않는다(러너 기본값 사용). 대신 `Toolchain` 스텝이 버전을 찍는다 — **그 Xcode가 프레임워크의 Swift module interface에 들어가므로 호환성 계약의 일부**다
 - 빌드 산출물은 flavor당 수 GB다. `rm -rf .build third-party`를 `if: always()`로 둔다
 - 상류 워크플로 24개는 트리거가 `main`/`*-stable`/`v0.*` 태그라 `scatterlab/**` push엔 무발화 → **트리에서 지우지 않는다**(지우면 리베이스마다 충돌). 위험한 것만 API로 개별 disable
+
+fork 자체 워크플로는 셋이다: `scatterlab-publish.yml`·`scatterlab-prebuild-ios.yml`(둘 다 `workflow_dispatch` 전용)과 `scatterlab-test-prebuilt-probe.yml`. 마지막 것만 `scatterlab/**` push와 `scripts/cocoapods/**` PR에서 자동으로 돈다 — 상류 `test-all`의 Ruby 잡이 `github.repository` 게이트에 막혀 이 fork에서는 아무 테스트도 돌지 않기 때문이다.
 
 ## 개발 루프
 
@@ -117,7 +120,7 @@ xcrun devicectl device process launch --device <id> --console --terminate-existi
 푸시는 항상 브랜치를 명시한다 — 로컬에 상류 `v0.*` 태그가 660여 개 있어서 `--tags`/`--follow-tags`가 사고를 낸다.
 
 ```bash
-git push origin scatterlab/0.86.2
+git push origin scatterlab/0.87.1
 ```
 
 ## 상류 기여
