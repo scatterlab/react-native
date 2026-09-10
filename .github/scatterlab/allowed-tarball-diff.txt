@@ -5,6 +5,11 @@ package.json
 scripts/cocoapods/rncore.rb
 scripts/cocoapods/rndependencies.rb
 
+# The prebuilt-artifact probe both of the files above call. rncore.rb and
+# rndependencies.rb share no code of their own, and utils.rb is the one file
+# both already require.
+scripts/cocoapods/utils.rb
+
 # iOS CJK IME composition, cause 7a of https://github.com/react/react-native/pull/56082.
 # These are compiled into React.xcframework, not from node_modules, so they only take
 # effect through the fork's own prebuilt release - see README.md.
