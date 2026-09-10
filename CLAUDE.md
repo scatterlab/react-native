@@ -41,6 +41,19 @@ gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scat
 - **게이트**: tarball이 상류 동일 base 버전과 `allowed-tarball-diff.txt` 밖에서 다르면 실패. 소스를 새로 건드리면 그 파일에 경로를 추가해야 한다
 - publish 직후 **~1분간 install이 `ETARGET`으로 실패**한다(packument와 dist-tags 캐시가 별개). 버전 bump PR은 install 확인 후에
 
+## Android prebuilt
+
+Android는 `com.facebook.react:react-android:<VERSION_NAME>`을 Maven Central에서 force resolve 하므로 **fork의 `ReactAndroid/**` 수정은 npm으로 안 간다**. 패치된 AAR을 따로 낸다.
+
+```bash
+gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
+  -f version=0.87.1-scatterlab.N -f verify_symbol=<이번에 추가한 식별자> -f dry_run=false
+```
+
+**순서 제약**: prebuilt 릴리스가 npm보다 먼저 있어야 한다. 없으면 소비자 Gradle configure가 abort한다. 설계·함정은 [`.github/scatterlab/android-prebuilt.md`](.github/scatterlab/android-prebuilt.md).
+
+`verify_symbol`이 load-bearing이다. 모든 fork 버전의 AAR 좌표가 동일해서, 이 검사 없이는 "아티팩트가 있다"가 "패치가 들어 있다"를 전혀 보증하지 않는다.
+
 ## iOS prebuilt
 
 prebuilt가 기본(0.84+)이고, 켜지면 **모든 React\* pod의 구현이 `React.xcframework`에서 온다**. 즉 **iOS 소스 수정은 prebuilt가 켜진 채로는 조용히 무효**다. 그래서 자체 빌드·호스팅한다.

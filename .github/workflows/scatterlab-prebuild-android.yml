@@ -1,0 +1,224 @@
+name: '[scatterlab] Build Android prebuilt'
+
+# Builds com.facebook.react:* from THIS fork's sources and attaches the resulting Maven
+# repository to a `prebuilt-android-<version>` release.
+#
+# Why this exists: RNGP force-resolves com.facebook.react:react-android:<VERSION_NAME> from
+# Maven Central and VERSION_NAME must stay on the upstream base, so a consumer never compiles
+# the fork's ReactAndroid sources. Consumed by
+# packages/react-native/scripts/android/scatterlab-prebuilt-maven.gradle.
+#
+# Runners: the org has an IP allow list and GitHub-hosted runners are not on it, so every
+# authenticated api.github.com write from a hosted runner fails with HTTP 403.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Fork version the artifacts are for, e.g. 0.87.1-scatterlab.3'
+        required: true
+        type: string
+      verify_symbol:
+        description: 'Identifier this version introduces, asserted to exist in the built AAR (e.g. visibleTextEnd). Leave empty for releases that add no new symbol.'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Build and verify only, do not create a release'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: arc-messenger-dev
+    permissions:
+      contents: write
+    outputs:
+      base: ${{ steps.v.outputs.base }}
+      tag: ${{ steps.v.outputs.tag }}
+      asset: ${{ steps.v.outputs.asset }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate versions
+        id: v
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-scatterlab\.[0-9]+$ ]]; then
+            echo "::error::version must look like 0.87.1-scatterlab.3"
+            exit 1
+          fi
+          BASE="${VERSION%-scatterlab.*}"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "tag=prebuilt-android-$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset=react-native-android-maven-$VERSION.tar.gz" >> "$GITHUB_OUTPUT"
+
+          # The AAR coordinate carries the base, not the fork version, so this is the only
+          # place the two are checked against each other.
+          GRADLE_VERSION=$(sed -n 's/^VERSION_NAME=//p' packages/react-native/ReactAndroid/gradle.properties)
+          if [ "$GRADLE_VERSION" != "$BASE" ]; then
+            echo "::error::ReactAndroid/gradle.properties VERSION_NAME is '$GRADLE_VERSION', expected the upstream base '$BASE'."
+            exit 1
+          fi
+
+          COMMITTED=$(node -p "require('./packages/react-native/package.json').version")
+          if [ "$COMMITTED" != "$VERSION" ]; then
+            echo "::warning::packages/react-native/package.json is at $COMMITTED but these artifacts are for $VERSION. They must match the version consumers install, or the URL the consumer script builds will not resolve."
+          fi
+
+  build:
+    needs: prepare
+    runs-on: arc-messenger-dev
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup git safe folders
+        run: git config --global --add safe.directory '*'
+
+      - uses: ./.github/actions/setup-node
+      - uses: ./.github/actions/yarn-install
+
+      # Without a warm ccache every run is a full C++ rebuild of ReactCommon.
+      - name: Restore the Android ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ccache
+          key: scatterlab-ccache-android-${{ hashFiles('packages/react-native/ReactAndroid/**/*.cpp', 'packages/react-native/ReactAndroid/**/*.h', 'packages/react-native/ReactCommon/**/*.cpp', 'packages/react-native/ReactAndroid/**/CMakeLists.txt', 'packages/react-native/ReactCommon/**/CMakeLists.txt') }}
+          restore-keys: scatterlab-ccache-android-
+
+      # The upstream .github/actions/build-android composite is deliberately NOT reused: it
+      # runs scripts/releases/set-rn-artifacts-version.js, which rewrites VERSION_NAME and
+      # breaks the coordinate the consumer resolves.
+      - name: Build and publish the Android artifacts to /tmp/maven-local
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/maven-local
+          # useHermesStable keeps Hermes off this build: com.facebook.hermes is a different
+          # publishing group, so it still resolves from Maven Central on the consumer side.
+          # isSnapshot stays off - it would append -SNAPSHOT to the coordinate.
+          env ORG_GRADLE_PROJECT_react.internal.useHermesStable=true \
+            ./gradlew publishAllToMavenTempLocal -PenableWarningsAsErrors=true
+
+      - name: Assert the Maven tree is complete
+        env:
+          BASE: ${{ needs.prepare.outputs.base }}
+        run: |
+          set -euo pipefail
+          DIR="/tmp/maven-local/com/facebook/react/react-android/$BASE"
+          for f in "react-android-$BASE-debug.aar" "react-android-$BASE-release.aar" \
+                   "react-android-$BASE.module" "react-android-$BASE.pom"; do
+            [ -f "$DIR/$f" ] || { echo "::error::$DIR/$f is missing"; exit 1; }
+          done
+
+      - name: Assert the patch is in the built AAR
+        if: ${{ inputs.verify_symbol != '' }}
+        env:
+          BASE: ${{ needs.prepare.outputs.base }}
+          SYMBOL: ${{ inputs.verify_symbol }}
+        run: |
+          set -euo pipefail
+          # Every fork version publishes the same coordinate, so "the artifact exists" proves
+          # nothing about which sources went into it. This is the only check that does.
+          WORK=$(mktemp -d)
+          unzip -q "/tmp/maven-local/com/facebook/react/react-android/$BASE/react-android-$BASE-release.aar" \
+            classes.jar -d "$WORK"
+          mkdir -p "$WORK/classes" && unzip -q "$WORK/classes.jar" -d "$WORK/classes"
+          COUNT=$(find "$WORK/classes" -name '*.class' -exec javap -p {} + 2>/dev/null | grep -c "$SYMBOL" || true)
+          echo "'$SYMBOL' occurrences in the release AAR: $COUNT"
+          [ "$COUNT" -gt 0 ] || { echo "::error::'$SYMBOL' is not in the built AAR - the sources that went in are not the ones you think"; exit 1; }
+          rm -rf "$WORK"
+
+      - name: Pack the Maven repository
+        id: pack
+        env:
+          ASSET: ${{ needs.prepare.outputs.asset }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/assets"
+          mkdir -p "$OUT"
+          # The archive root IS the repository root, so the consumer extracts straight into
+          # its cache directory with no strip-components guesswork.
+          tar -C /tmp/maven-local -czf "$OUT/$ASSET" .
+          ( cd "$OUT" && sha256sum "$ASSET" | awk '{print $1}' > "$ASSET.sha256" )
+          ls -lh "$OUT"
+          echo "dir=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the assets as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-android-${{ inputs.version }}
+          path: ${{ steps.pack.outputs.dir }}
+          if-no-files-found: error
+
+      - name: Create the release and upload the assets
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ inputs.version }}
+          DIR: ${{ steps.pack.outputs.dir }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Android prebuilt for $VERSION" \
+              --notes "com.facebook.react Maven artifacts built from this fork for @scatterlab/react-native@$VERSION. Consumed by scripts/android/scatterlab-prebuilt-maven.gradle." \
+              --prerelease
+          fi
+          # No --clobber: a consumer with a warm cache cannot detect a replaced asset and
+          # would keep the old AAR forever. Publish a new -scatterlab.N instead.
+          gh release upload "$TAG" "$DIR"/*
+
+      - name: Save the Android ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: scatterlab-ccache-android-${{ hashFiles('packages/react-native/ReactAndroid/**/*.cpp', 'packages/react-native/ReactAndroid/**/*.h', 'packages/react-native/ReactCommon/**/*.cpp', 'packages/react-native/ReactAndroid/**/CMakeLists.txt', 'packages/react-native/ReactCommon/**/CMakeLists.txt') }}
+
+      # A shared runner: the build products are several GB.
+      - name: Clean the build products
+        if: always()
+        run: rm -rf /tmp/maven-local
+
+  verify:
+    needs: [prepare, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: arc-messenger-dev
+    steps:
+      - name: Assert the release is consumable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ASSET: ${{ needs.prepare.outputs.asset }}
+          BASE: ${{ needs.prepare.outputs.base }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # GitHub rewrites asset names containing unexpected characters, so compare exactly
+          # rather than trusting the upload.
+          gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name' | sort > /tmp/actual
+          printf '%s\n%s\n' "$ASSET" "$ASSET.sha256" | sort > /tmp/expected
+          diff /tmp/expected /tmp/actual
+
+          URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
+          curl -sL -o /tmp/asset.tar.gz "$URL"
+          EXPECTED=$(curl -sL "$URL.sha256" | tr -d '[:space:]')
+          ACTUAL=$(sha256sum /tmp/asset.tar.gz | awk '{print $1}')
+          [ "$EXPECTED" = "$ACTUAL" ] || { echo "::error::sha256 mismatch: $EXPECTED vs $ACTUAL"; exit 1; }
+
+          for f in "react-android-$BASE-debug.aar" "react-android-$BASE-release.aar" \
+                   "react-android-$BASE.module" "react-android-$BASE.pom"; do
+            tar tzf /tmp/asset.tar.gz "./com/facebook/react/react-android/$BASE/$f" >/dev/null \
+              || { echo "::error::$f is missing from the archive"; exit 1; }
+          done
+          echo "release $TAG is consumable"
