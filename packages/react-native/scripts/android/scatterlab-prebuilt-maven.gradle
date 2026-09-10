@@ -1,0 +1,189 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+// Points the consumer's build at this fork's Android artifacts.
+//
+// RNGP force-resolves com.facebook.react:react-android:<VERSION_NAME> from Maven Central,
+// and VERSION_NAME has to stay on the upstream base, so the fork's ReactAndroid sources are
+// never compiled by a consumer. This fetches the AAR this fork built and hands its path to
+// RNGP via react.internal.mavenLocalRepo, which also makes RNGP exclude the whole
+// com.facebook.react group from Maven Central. See .github/scatterlab/android-prebuilt.md.
+//
+// Apply from the consumer's settings.gradle(.kts):
+//   apply(from = "<...>/node_modules/react-native/scripts/android/scatterlab-prebuilt-maven.gradle")
+
+import java.security.MessageDigest
+
+def packageJson = new File(buildscript.sourceFile.parentFile, '../../package.json').canonicalFile
+def pkg = new groovy.json.JsonSlurper().parse(packageJson)
+
+// Decide by package identity, not by the shape of a version string: an upstream
+// react-native install has nothing of ours to fetch, so stay out of the way entirely.
+if (pkg.name != '@scatterlab/react-native') {
+  return
+}
+
+def version = pkg.version
+if (!(version ==~ /^\d+\.\d+\.\d+-scatterlab\.\d+$/)) {
+  // Our package, but a version this script cannot map to a release. Returning here would
+  // hand the build back to Maven Central and ship the unpatched upstream AAR in silence.
+  throw new GradleException(
+      "[scatterlab] ${packageJson} is @scatterlab/react-native at version '${version}', which\n" +
+      "  does not name a prebuilt Android release (expected e.g. 0.87.1-scatterlab.3).\n" +
+      "  Continuing would resolve the unpatched upstream AAR from Maven Central instead.")
+}
+
+def base = version.replaceFirst(/-scatterlab\.\d+$/, '')
+def tag = "prebuilt-android-${version}"
+def asset = "react-native-android-maven-${version}.tar.gz"
+
+// SCATTERLAB_PREBUILT_BASE_URL redirects the download at the local fixture server of
+// android-prebuilt-consumer-test.sh. It is honoured only for a loopback origin: the .sha256
+// sidecar is fetched from the same base, so any other origin would supply both the archive
+// and the checksum it is verified against, and the integrity gate would prove nothing.
+// Binding loopback on the build machine already means owning that build.
+def overrideBaseUrl = System.getenv('SCATTERLAB_PREBUILT_BASE_URL')
+def overrideHost = null
+if (overrideBaseUrl) {
+  try {
+    overrideHost = new java.net.URI(overrideBaseUrl).host
+  } catch (java.net.URISyntaxException ignored) {
+    overrideHost = null
+  }
+}
+def loopbackOverride = overrideHost in ['127.0.0.1', '[::1]', 'localhost']
+def baseUrl = loopbackOverride
+    ? overrideBaseUrl
+    : 'https://github.com/scatterlab/react-native/releases/download'
+def assetUrl = "${baseUrl}/${tag}/${asset}"
+
+// Scoped by fork version on purpose. VERSION_NAME is pinned to the base, so every fork
+// version publishes the SAME coordinate - sharing one repo root would let Gradle keep
+// serving the previous version's AAR with no error at all.
+def repoDir = new File(gradle.gradleUserHomeDir, "scatterlab-react-native/${version}/maven")
+
+def fail = { String why ->
+  throw new GradleException(
+      "[scatterlab] ${why}\n" +
+      "  This version of @scatterlab/react-native carries Android native changes that only\n" +
+      "  exist in this fork's prebuilt artifacts. Run the '[scatterlab] Build Android prebuilt'\n" +
+      "  workflow for ${version}, then build again.\n" +
+      "  Expected: ${assetUrl}")
+}
+
+if (overrideBaseUrl && !loopbackOverride) {
+  fail("SCATTERLAB_PREBUILT_BASE_URL is set to '${overrideBaseUrl}', whose host is not a" +
+       " loopback address (127.0.0.1, [::1], localhost). It exists only to point the smoke" +
+       " test at a local fixture server; from any other origin the archive and the .sha256" +
+       " it is checked against would come from the same place, so refusing rather than" +
+       " falling back to the real release.")
+}
+
+def download = { String url, File target ->
+  def connection = new URL(url).openConnection()
+  connection.instanceFollowRedirects = true
+  connection.connectTimeout = 30_000
+  connection.readTimeout = 300_000
+  try {
+    def code = connection.responseCode
+    if (code != 200) {
+      fail("${url} returned HTTP ${code}.")
+    }
+    target.withOutputStream { out -> connection.inputStream.withStream { input -> out << input } }
+  } catch (GradleException e) {
+    // fail() already threw the right message (e.g. a non-200 status, or a sha256
+    // mismatch further down) - do not relabel it as a network error.
+    throw e
+  } catch (Exception e) {
+    // Anything before a status even exists - DNS failure, connect timeout, TLS error -
+    // must still go through fail() so the consumer gets the same guidance instead of a
+    // raw stack trace.
+    fail("${url} failed: ${e.class.simpleName}: ${e.message}")
+  }
+}
+
+def sha256 = { File file ->
+  def digest = MessageDigest.getInstance('SHA-256')
+  file.eachByte(1024 * 1024) { buffer, length -> digest.update(buffer, 0, length) }
+  digest.digest().encodeHex().toString()
+}
+
+// "The directory exists" is not "the cache is good": an interrupted extract or a partial
+// cleanup leaves a tree Gradle cannot resolve from, and the property would point at it.
+// The .pom is the cheapest artifact that only exists once the archive really landed.
+def cachedPom = new File(repoDir, "com/facebook/react/react-android/${base}/react-android-${base}.pom")
+
+if (!cachedPom.isFile()) {
+  // Staged/locked next to the final location, not inside it: both the lock file and the
+  // staging dir have to survive repoDir itself being deleted and recreated below, and the
+  // staging move has to be a rename on the same filesystem.
+  repoDir.parentFile.mkdirs()
+
+  // Two Gradle processes resolving the same fork version at once (ordinary on a CI runner
+  // with parallel jobs, or a developer running two builds) can both reach this branch
+  // together. Without serializing, one process's deleteDir() can pull repoDir out from under
+  // another that is still installing or reading it. A lock file beside repoDir - not inside
+  // it, since repoDir is what gets deleted and recreated - serializes the whole
+  // check-delete-download-extract-rename sequence per fork version. lock() blocks rather
+  // than failing: the process already holding it is doing the work this one was about to do.
+  def lockFile = new File(repoDir.parentFile, 'maven.lock')
+  def lockRaf = new java.io.RandomAccessFile(lockFile, 'rw')
+  try {
+    def lock = lockRaf.channel.lock()
+    try {
+      // Re-check now that the lock is held: the previous holder may have just finished
+      // installing the cache, which makes the check above stale. Skipping this would only
+      // narrow the race, not close it.
+      if (!cachedPom.isFile()) {
+        // A cache that fails the check above is corrupt, not fatal - drop it and
+        // re-download so it self-heals. The delete also clears the way for the rename
+        // below.
+        repoDir.deleteDir()
+        def staging = java.nio.file.Files
+            .createTempDirectory(repoDir.parentFile.toPath(), 'staging')
+            .toFile()
+        try {
+          def tarball = new File(staging, asset)
+          download(assetUrl, tarball)
+
+          def expectedFile = new File(staging, "${asset}.sha256")
+          download("${assetUrl}.sha256", expectedFile)
+          def expected = expectedFile.text.trim().split(/\s+/)[0]
+          def actual = sha256(tarball)
+          if (expected != actual) {
+            fail("${asset} sha256 mismatch: expected ${expected}, got ${actual}.")
+          }
+
+          def extracted = new File(staging, 'maven')
+          extracted.mkdirs()
+          def proc = ['tar', '-xzf', tarball.absolutePath, '-C', extracted.absolutePath].execute()
+          def stderr = new StringBuffer()
+          proc.waitForProcessOutput(new StringBuffer(), stderr)
+          if (proc.exitValue() != 0) {
+            fail("extracting ${asset} failed: ${stderr}")
+          }
+
+          // Move only once the tree is complete: a half-extracted directory must never be
+          // left behind as a cache hit for the next build.
+          if (!extracted.renameTo(repoDir) && !cachedPom.isFile()) {
+            fail("could not move the extracted repository into ${repoDir}.")
+          }
+        } finally {
+          staging.deleteDir()
+        }
+      }
+    } finally {
+      lock.release()
+    }
+  } finally {
+    lockRaf.close()
+  }
+}
+
+gradle.beforeProject { project ->
+  project.extensions.extraProperties.set('react.internal.mavenLocalRepo', repoDir.absolutePath)
+}
