@@ -372,13 +372,19 @@ class ReactNativeCoreUtils
         return "#{FORK_PREBUILT_RELEASE_URL}/prebuilt-ios-#{version}/react-native-artifacts-#{version}-reactnative-core-#{dsyms ? "dSYM-" : ""}#{build_type.to_s}.tar.gz"
     end
 
-    ## A 404 means nobody cut the release; anything else means we could not ask.
-    ## The two need different instructions, and the old message only gave the first.
+    ## Three outcomes, three instructions: nobody cut the release, the host
+    ## refused, or we never got an answer. The old message only gave the first.
+    ## `%{http_code}` is 000 when curl never completed a response.
     def self.fork_prebuilt_failure_reason()
-        if @@last_probe[:http_code] == "404"
-            return "no prebuilt release exists (#{@@last_probe[:summary]}). Run the '[scatterlab] Build iOS prebuilt core' workflow for this version, or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source."
+        code = @@last_probe[:http_code]
+        fallback = "or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source."
+        if code == "404"
+            return "no prebuilt release exists (#{@@last_probe[:summary]}). Run the '[scatterlab] Build iOS prebuilt core' workflow for this version, #{fallback}"
         end
-        return "the release host did not answer (#{@@last_probe[:summary]}). Retry once it is reachable, or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source."
+        if code.to_i > 0
+            return "the release host answered HTTP #{code} (#{@@last_probe[:summary]}). Retry once it recovers, #{fallback}"
+        end
+        return "the release host did not answer (#{@@last_probe[:summary]}). Retry once it is reachable, #{fallback}"
     end
 
     ## One HEAD probe per pod install, against the debug framework only, so that all

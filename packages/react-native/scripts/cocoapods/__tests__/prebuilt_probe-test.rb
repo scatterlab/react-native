@@ -372,6 +372,18 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         assert_true(error.message.include?("no prebuilt release exists"))
     end
 
+    # A 5xx is the host refusing, not the host being unreachable, and it needs
+    # the retry-later wording rather than "no release exists".
+    def test_forkPrebuiltPublished_whenTheHostErrors_namesTheStatus
+        server = start_server { ["503 Service Unavailable", ""] }
+        stub_fork_release_url(url_for(server))
+
+        error = assert_raise(SystemExit) { ReactNativeCoreUtils.fork_prebuilt_published?(VERSION) }
+
+        assert_true(error.message.include?("HTTP 503"))
+        assert_false(error.message.include?("did not answer"))
+    end
+
     # curl absent from PATH used to fall back silently (exit 127); it must not
     # raise out of a Podfile now that the probe decides whether to abort.
     def test_probeArtifact_whenCurlIsNotInstalled_reportsItInsteadOfRaising

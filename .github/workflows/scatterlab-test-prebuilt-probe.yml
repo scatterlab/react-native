@@ -26,6 +26,10 @@ jobs:
       # v4 like the other scatterlab workflows, not the v6 the upstream ones
       # pin - one policy per owner is easier to bump than a mixed tree.
       - uses: actions/checkout@v4
+        with:
+          # This job runs Ruby from the PR. Nothing here talks to git, so the
+          # checkout token has no reason to stay in the git config.
+          persist-credentials: false
 
       - uses: ruby/setup-ruby@v1
         with:
