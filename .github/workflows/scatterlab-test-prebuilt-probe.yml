@@ -19,9 +19,12 @@ jobs:
   ruby-tests:
     name: Prebuilt probe Ruby tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
+      # v4 like the other scatterlab workflows, not the v6 the upstream ones
+      # pin - one policy per owner is easier to bump than a mixed tree.
       - uses: actions/checkout@v4
 
       - uses: ruby/setup-ruby@v1
@@ -44,4 +47,5 @@ jobs:
             echo 'require_relative "cocoapods/__tests__/rndependencies-test.rb"'
             echo 'require_relative "cocoapods/__tests__/prebuilt_probe-test.rb"'
           } > scatterlab_tests.rb
+          trap 'rm -f scatterlab_tests.rb' EXIT
           ruby -Itest scatterlab_tests.rb

@@ -65,7 +65,9 @@ react-native-artifacts-0.86.2-reactnative-core-debug.tar.gz               → 20
 
 ### artifact probe는 fail-closed다
 
-`ReactNativePodsUtils.probe_artifact`(`scripts/cocoapods/utils.rb`)가 core·deps 양쪽의 HEAD 조회를 담당한다. 두 파일이 이미 공통으로 require하는 유일한 파일이라 여기 둔다. `--disable`로 러너 `~/.curlrc`를 무시하고, 최대 3회(연결 10초, 요청당 30초, 1초 간격) 시도한 뒤 HTTP 상태와 curl 종료 코드를 함께 돌려준다. 404도 재시도 대상이다 — artifact 게시 직후의 전파 지연을 흡수하기 위해서다. 응답이 멈춘 호스트에서는 probe 한 번이 최대 ~92초까지 걸리고 core 경로는 install당 두 번 조회하므로, 느린 `pod install`을 hang으로 오판하지 않는다. 로그·에러 메시지에는 **호스트만** 남는다 — URL 경로·쿼리와 curl stderr에는 프록시나 엔터프라이즈 미러의 자격증명이 실린다.
+`ReactNativePodsUtils.probe_artifact`(`scripts/cocoapods/utils.rb`)가 core·deps 양쪽의 HEAD 조회를 담당한다. 두 파일이 이미 공통으로 require하는 유일한 파일이라 여기 둔다. `--disable`로 러너 `~/.curlrc`를 무시하고, 최대 3회(연결 10초, 요청당 30초, 1초 간격) 시도한 뒤 HTTP 상태와 curl 종료 코드를 함께 돌려준다. 404도 재시도 대상이다 — artifact 게시 직후의 전파 지연을 흡수하기 위해서다. `--max-time`은 전체가 아니라 **시도당**이라 응답이 멈춘 호스트에서는 probe 한 번이 최대 ~92초다. 느린 `pod install`을 hang으로 오판하지 않는다.
+
+`--disable`이 막는 건 `--write-out` 같은 우리 플래그가 아니다 — curl은 config를 먼저, 커맨드라인을 나중에 읽어 커맨드라인이 이긴다. 막히는 건 우리가 지정하지 않는 설정, 특히 `proxy`·`resolve`·`insecure`처럼 **probe가 호스트에 닿는지 자체를 바꾸는** 것들이다. probe의 로그·에러 메시지에는 **호스트만** 남는다 — URL 경로·쿼리와 curl stderr에는 프록시나 엔터프라이즈 미러의 자격증명이 실린다. 이건 probe에 한정된 보장이다: 조회가 성공해 실제 다운로드로 넘어가면 상류 코드(`rndependencies.rb`의 `Using tarball from URL:`)가 전체 URL을 그대로 찍는다.
 
 한쪽만 내려간 조합은 **중단한다**. 어느 쪽으로 굴러도 나쁘기 때문이다.
 

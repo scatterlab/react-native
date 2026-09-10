@@ -511,7 +511,12 @@ class ReactNativeCoreUtils
     end
 
     def self.release_artifact_exists(version)
-        return artifact_exists(stable_tarball_url(version, :debug))
+        url = stable_tarball_url(version, :debug)
+        ## stable_tarball_url asks fork_prebuilt_published?, which already probed
+        ## this exact URL. Probing it again doubles the worst case for no answer
+        ## we do not have.
+        return true if url == fork_stable_tarball_url(version, :debug)
+        return artifact_exists(url)
     end
 
     def self.nightly_artifact_exists(version)

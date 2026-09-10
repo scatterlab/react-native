@@ -23,27 +23,38 @@ class ReactNativePodsUtils
     # install over one blip. Returns :ok, :http_code, :curl_exit and a :summary
     # safe to log — proxies and enterprise mirrors carry credentials in the URL
     # path, the query and curl's stderr, so none of the three appear in it.
-    # `--disable` ignores the runner's ~/.curlrc, which can rewrite --write-out.
+    # `--disable` skips the runner's ~/.curlrc. A config cannot override a flag
+    # passed here - curl reads the config first and the command line second -
+    # but it can add settings we pass none of, and a stray `proxy` or `resolve`
+    # decides whether the probe reaches the host at all.
     # The argv form of IO.popen runs curl without a shell, so a URL carrying `&`
     # or `?` needs no quoting; curl's own diagnostics are dropped rather than
     # inherited, since they quote the URL back in full.
     def self.probe_artifact(tarball_url)
-        http_code = IO.popen([
+        argv = [
             'curl', '--disable', '--head', '--location', '--fail',
             '--retry', '2', '--retry-delay', '1', '--retry-all-errors',
             '--connect-timeout', '10', '--max-time', '30',
             '--silent', '--output', '/dev/null',
             '--write-out', '%{http_code}', tarball_url
-        ], :err => File::NULL, &:read)
-        status = $?
+        ]
+        begin
+            http_code = IO.popen(argv, :err => File::NULL, &:read)
+            curl_exit = $?.exitstatus
+        rescue Errno::ENOENT
+            # No curl on PATH. Upstream's backtick form reported this as a plain
+            # failed probe; raising out of a Podfile instead would be a worse
+            # trade now that the probe decides whether to abort.
+            http_code = ""
+            curl_exit = "not found"
+        end
         http_code = http_code.strip
-        curl_exit = status.exitstatus
         # URI() raises on a URL it cannot parse and quotes the whole URL in the
         # message - the one string this method exists to keep out of the logs.
         # ENTERPRISE_REPOSITORY is user-supplied, so that input is reachable.
         host = (URI(tarball_url).host rescue nil) || "unknown host"
         {
-            :ok => status.success? && http_code == "200",
+            :ok => curl_exit == 0 && http_code == "200",
             :http_code => http_code,
             :curl_exit => curl_exit,
             :summary => "#{host}: HTTP #{http_code}, curl exit #{curl_exit}",

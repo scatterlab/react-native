@@ -9,24 +9,30 @@ require_relative "../utils.rb"
 require_relative "../rndependencies.rb"
 require_relative "../rncore.rb"
 
-# The suite shares one process, so another test file may have loaded PodMock and
-# made Pod::UI resolvable. The logs then run through CocoaPods' colorize helpers,
-# which only exist inside the real pod binary.
-unless String.method_defined?(:green)
-    class String
-        def green; self; end
-        def red; self; end
-        def yellow; self; end
-    end
-end
-
 class PrebuiltProbeTests < Test::Unit::TestCase
 
-    ENV_KEYS = %w[RCT_USE_RN_DEP RCT_USE_PREBUILT_RNCORE RCT_USE_LOCAL_RN_DEP RCT_TESTONLY_RNCORE_TARBALL_PATH ENTERPRISE_REPOSITORY CURL_HOME]
+    ENV_KEYS = %w[PATH RCT_USE_RN_DEP RCT_USE_PREBUILT_RNCORE RCT_USE_LOCAL_RN_DEP RCT_TESTONLY_RNCORE_TARBALL_PATH ENTERPRISE_REPOSITORY CURL_HOME]
 
     def setup
         @saved_env = ENV_KEYS.to_h { |key| [key, ENV[key]] }
         @servers = []
+        install_color_shim
+    end
+
+    # Another test file may have loaded PodMock, which makes Pod::UI resolvable,
+    # and the logs then run through CocoaPods' colorize helpers - they only exist
+    # inside the real pod binary. Defining them for the whole process changes how
+    # later test files behave (utils-test.rb reports different errors with them
+    # present), so they live only for the duration of one test.
+    COLORS = [:green, :red, :yellow]
+
+    def install_color_shim
+        @color_shim = COLORS.reject { |name| String.method_defined?(name) }
+        @color_shim.each { |name| String.send(:define_method, name) { self } }
+    end
+
+    def remove_color_shim
+        @color_shim.to_a.each { |name| String.send(:remove_method, name) }
     end
 
     def teardown
@@ -37,6 +43,7 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         ReactNativeCoreUtils.class_variable_set(:@@fork_prebuilt_published, nil)
         ReactNativeCoreUtils.class_variable_set(:@@react_native_version, "")
         ReactNativeCoreUtils.class_variable_set(:@@build_from_source, true)
+        remove_color_shim
         if @original_fork_url
             ReactNativeCoreUtils.singleton_class.send(:define_method, :fork_stable_tarball_url, @original_fork_url)
             @original_fork_url = nil
@@ -133,14 +140,19 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         assert_true(result[:summary].include?("curl exit #{result[:curl_exit]}"))
     end
 
+    # `proxy` and not `write-out`: curl reads the config first and the command
+    # line second, so a curlrc cannot override a flag we pass. What it CAN do is
+    # add settings we pass none of - a proxy, a resolve override, insecure - and
+    # those decide whether the probe reaches the host at all.
+    #
     # Built by hand rather than with tmpdir: that library pulls in the real
     # FileUtils, which would replace the suite's FileUtils mock for every test
     # loaded after this file.
-    def test_probeArtifact_whenTheRunnerCustomisesCurlOutput_ignoresIt
+    def test_probeArtifact_whenTheRunnerConfiguresAProxy_ignoresIt
         dir = File.join(ENV["TMPDIR"] || "/tmp", "rn-prebuilt-probe-#{Process.pid}")
         curlrc = File.join(dir, ".curlrc")
         Dir.mkdir(dir) unless Dir.exist?(dir)
-        File.write(curlrc, "write-out = \"polluted\"\n")
+        File.write(curlrc, "proxy = \"http://127.0.0.1:1\"\n")
         ENV["CURL_HOME"] = dir
         server = start_server { ["200 OK", ""] }
 
@@ -320,6 +332,28 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         error = assert_raise(SystemExit) { ReactNativeCoreUtils.fork_prebuilt_published?("0.87.1-scatterlab.2") }
 
         assert_true(error.message.include?("curl exit"))
-        assert_false(error.message.include?("no prebuilt release was found"))
+        assert_true(error.message.include?("did not answer"))
+    end
+
+    # The other half of the same message: a 404 means the release was never cut,
+    # and that is the case CLAUDE.md calls out as the dangerous partial release.
+    def test_forkPrebuiltPublished_whenTheReleaseIsMissing_abortsSayingSo
+        server = start_server { ["404 Not Found", ""] }
+        stub_fork_release_url(url_for(server))
+
+        error = assert_raise(SystemExit) { ReactNativeCoreUtils.fork_prebuilt_published?(VERSION) }
+
+        assert_true(error.message.include?("no prebuilt release exists"))
+    end
+
+    # curl absent from PATH used to fall back silently (exit 127); it must not
+    # raise out of a Podfile now that the probe decides whether to abort.
+    def test_probeArtifact_whenCurlIsNotInstalled_reportsItInsteadOfRaising
+        ENV["PATH"] = ""
+
+        result = ReactNativePodsUtils.probe_artifact("https://example.com/artifact.tar.gz")
+
+        assert_false(result[:ok])
+        assert_true(result[:summary].include?("curl exit not found"))
     end
 end
