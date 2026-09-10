@@ -257,7 +257,7 @@ ReactAndroid/src/main/java/com/facebook/react/views/text/TextDecorationStyle.kt
 
 ```bash
 cd packages/react-native && npm pack --silent && cd -
-.github/scatterlab/verify-tarball.sh packages/react-native/*.tgz
+.github/scatterlab/verify-tarball.sh packages/react-native/*.tgz 0.87.1
 ```
 
 기대: 통과. `TextDecorationStyle.kt`가 allowlist 밖이라고 실패하면 Step 5의 경로 문자열이 tarball 상대 경로와 다른 것이다 — `tar tzf`로 실제 경로를 확인하고 맞춘다.
@@ -281,7 +281,6 @@ fix(android): 잘린 layout 밖으로 나간 text decoration offset을 clamp
 이슈 https://github.com/react/react-native/issues/58356
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01H4MubfsmtFzkS44FBTvSaS
 MSG
 )"
 ```
@@ -543,7 +542,7 @@ scripts/android/scatterlab-prebuilt-maven.gradle
 ```bash
 cd packages/react-native && npm pack --silent && cd -
 tar tzf packages/react-native/*.tgz | grep 'scripts/android/'
-.github/scatterlab/verify-tarball.sh packages/react-native/*.tgz
+.github/scatterlab/verify-tarball.sh packages/react-native/*.tgz 0.87.1
 ```
 
 기대: `package/scripts/android/scatterlab-prebuilt-maven.gradle` 한 줄이 나오고, 게이트 통과.
@@ -569,7 +568,6 @@ Maven Central 에서 `com.facebook.react` 그룹을 제외한다.
 버전의 좌표가 같으므로, 한 루트를 공유하면 옛 AAR 이 에러 없이 재사용된다.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01H4MubfsmtFzkS44FBTvSaS
 MSG
 )"
 ```
@@ -867,7 +865,6 @@ ci(scatterlab): Android prebuilt 빌드·릴리스 워크플로
 포함을 전혀 보증하지 않는다.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01H4MubfsmtFzkS44FBTvSaS
 MSG
 )"
 ```
@@ -890,7 +887,7 @@ cd ~/GitHub/react-native/.claude/worktrees/daewoon+android-prebuilt
   --tests "com.facebook.react.views.text.TextDecorationStyleTest"
 .github/scatterlab/__tests__/android-prebuilt-consumer-test.sh
 cd packages/react-native && npm pack --silent && cd - && \
-  .github/scatterlab/verify-tarball.sh packages/react-native/*.tgz && rm -f packages/react-native/*.tgz
+  .github/scatterlab/verify-tarball.sh packages/react-native/*.tgz 0.87.1 && rm -f packages/react-native/*.tgz
 ```
 
 기대: 셋 다 통과. 하나라도 실패하면 PR을 열지 않는다.
@@ -915,8 +912,6 @@ gh pr create --repo scatterlab/react-native \
 
 ```
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-https://claude.ai/code/session_01H4MubfsmtFzkS44FBTvSaS
 ```
 
 ---
@@ -978,7 +973,6 @@ RNGP 가 `com.facebook.react:react-android:<VERSION_NAME>` 을 Maven Central
 Android 네이티브 수정이 빌드에 하나도 안 들어간다.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01H4MubfsmtFzkS44FBTvSaS
 MSG
 )"
 git push origin daewoon/rn-android-prebuilt
