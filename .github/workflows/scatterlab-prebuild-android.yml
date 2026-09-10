@@ -72,6 +72,18 @@ jobs:
             echo "::warning::packages/react-native/package.json is at $COMMITTED but these artifacts are for $VERSION. They must match the version consumers install, or the URL the consumer script builds will not resolve."
           fi
 
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # The only automated coverage of the consumer script's fail-closed behavior (no-op on
+      # upstream, abort on a missing release, warm-cache reuse with no network). This is what
+      # stops an unpatched AAR shipping silently, so it runs on every release build - cheap,
+      # Linux-only, no Android SDK needed.
+      - name: Run the consumer script smoke test
+        run: .github/scatterlab/__tests__/android-prebuilt-consumer-test.sh
+
   build:
     needs: prepare
     runs-on: arc-messenger-dev
@@ -145,7 +157,7 @@ jobs:
             exit 1
           fi
 
-          COUNT=$(printf '%s\n' "$DISASM" | grep -c "$SYMBOL" || true)
+          COUNT=$(printf '%s\n' "$DISASM" | grep -cF "$SYMBOL" || true)
           echo "'$SYMBOL' occurrences in the release AAR: $COUNT"
           [ "$COUNT" -gt 0 ] || { echo "::error::'$SYMBOL' is not in the built AAR - the sources that went in are not the ones you think"; exit 1; }
           rm -rf "$WORK"

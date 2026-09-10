@@ -1,6 +1,8 @@
 # Android prebuilt 배포 파이프라인 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**진행 상태:** Task 1–3은 이 브랜치에 완료·커밋됨(`git log --oneline ff27ad0f0d8..bbda7fb082b`). Task 4(fork PR 올리기)·Task 5(zeta-frontend 배선, 다른 레포)·Task 6(출고)는 미착수.
+
+> **For agentic workers:** Task 1–3은 완료됐으니 그 구간을 다시 실행하지 말 것. Task 4부터 이어서 진행할 때만 REQUIRED SUB-SKILL로 superpowers:subagent-driven-development(recommended) 또는 superpowers:executing-plans를 쓴다. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** fork가 수정한 Android 네이티브 코드가 실제로 소비자 앱에 실리는 경로를 만들고, 첫 화물로 `TextDecorationStyle` IndexOutOfBounds 크래시 수정을 태운다.
 
@@ -60,7 +62,7 @@
 - Consumes: 없음 (첫 태스크)
 - Produces: `private fun visibleTextEnd(layout: Layout): Int` — Task 3의 `verify_symbol` 게이트가 이 이름을 심볼로 찾는다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `TextDecorationStyleTest.kt`의 import 블록을 아래로 교체한다:
 
@@ -159,7 +161,7 @@ class TextDecorationStyleTest {
   }
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 ```bash
 cd ~/GitHub/react-native/.claude/worktrees/daewoon+android-prebuilt
@@ -171,7 +173,7 @@ cd ~/GitHub/react-native/.claude/worktrees/daewoon+android-prebuilt
 
 이 에러가 정확히 재현되지 않으면 멈춘다 — 재현 없는 수정은 검증되지 않는다.
 
-- [ ] **Step 3: 최소 구현을 넣는다**
+- [x] **Step 3: 최소 구현을 넣는다**
 
 `TextDecorationStyle.kt`에서 `drawDecorationLine` 함수가 끝나는 `}` 다음, `drawSpannedDecoration`의 KDoc 앞에 아래를 삽입한다:
 
@@ -229,7 +231,7 @@ private fun visibleTextEnd(layout: Layout): Int {
 
 `min`은 이미 `kotlin.math.min`으로 import 되어 있다. 새 import 없다.
 
-- [ ] **Step 4: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 4: 테스트가 통과하는 것을 확인한다**
 
 ```bash
 ./gradlew :packages:react-native:ReactAndroid:testDebugUnitTest \
@@ -238,7 +240,7 @@ private fun visibleTextEnd(layout: Layout): Int {
 
 기대: 8개 전부 PASS.
 
-- [ ] **Step 5: tarball diff 게이트에 경로를 등록한다**
+- [x] **Step 5: tarball diff 게이트에 경로를 등록한다**
 
 `.github/scatterlab/allowed-tarball-diff.txt` 끝에 추가한다:
 
@@ -253,7 +255,7 @@ ReactAndroid/src/main/java/com/facebook/react/views/text/TextDecorationStyle.kt
 
 테스트 파일은 `package.json`의 `files`가 `!ReactAndroid/src/test`로 제외하므로 tarball에 없다. 추가하지 않는다.
 
-- [ ] **Step 6: 게이트가 통과하는지 확인한다**
+- [x] **Step 6: 게이트가 통과하는지 확인한다**
 
 ```bash
 cd packages/react-native && npm pack --silent && cd -
@@ -262,7 +264,7 @@ cd packages/react-native && npm pack --silent && cd -
 
 기대: 통과. `TextDecorationStyle.kt`가 allowlist 밖이라고 실패하면 Step 5의 경로 문자열이 tarball 상대 경로와 다른 것이다 — `tar tzf`로 실제 경로를 확인하고 맞춘다.
 
-- [ ] **Step 7: 커밋**
+- [x] **Step 7: 커밋**
 
 ```bash
 rm -f packages/react-native/*.tgz
@@ -304,7 +306,7 @@ MSG
   - 캐시 경로 `<gradleUserHome>/scatterlab-react-native/<version>/maven`.
   - 소비자가 apply 할 경로: `<node_modules>/react-native/scripts/android/scatterlab-prebuilt-maven.gradle` — Task 5가 이 경로를 쓴다.
 
-- [ ] **Step 1: 실패하는 스모크 테스트를 쓴다**
+- [x] **Step 1: 실패하는 스모크 테스트를 쓴다**
 
 `.github/scatterlab/__tests__/android-prebuilt-consumer-test.sh` 를 만든다:
 
@@ -388,7 +390,7 @@ check "warm cache is used" \
 echo "all cases passed"
 ```
 
-- [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
+- [x] **Step 2: 테스트가 실패하는 것을 확인한다**
 
 ```bash
 cd ~/GitHub/react-native/.claude/worktrees/daewoon+android-prebuilt
@@ -398,7 +400,7 @@ chmod +x .github/scatterlab/__tests__/android-prebuilt-consumer-test.sh
 
 기대: 스크립트 파일이 없어 `cp`에서 실패한다. 3개 케이스 전부 도달 못 함.
 
-- [ ] **Step 3: 스크립트를 구현한다**
+- [x] **Step 3: 스크립트를 구현한다**
 
 `packages/react-native/scripts/android/scatterlab-prebuilt-maven.gradle` 를 만든다:
 
@@ -509,7 +511,7 @@ gradle.beforeProject { project ->
 }
 ```
 
-- [ ] **Step 4: 테스트가 통과하는 것을 확인한다**
+- [x] **Step 4: 테스트가 통과하는 것을 확인한다**
 
 ```bash
 .github/scatterlab/__tests__/android-prebuilt-consumer-test.sh
@@ -519,7 +521,7 @@ gradle.beforeProject { project ->
 
 케이스 B가 HTTP 404 대신 다른 에러로 죽으면 메시지에 `prebuilt-android-...`가 들어가는지만 본다 — 이 테스트가 확인하는 것은 "조용히 통과하지 않는다"이다.
 
-- [ ] **Step 5: 스크립트를 npm 패키지에 포함시킨다**
+- [x] **Step 5: 스크립트를 npm 패키지에 포함시킨다**
 
 `packages/react-native/package.json`의 `files` 배열에서 `scripts/`로 시작하는 항목들 사이, `scripts/codegen` 다음 줄에 추가한다:
 
@@ -529,7 +531,7 @@ gradle.beforeProject { project ->
 
 `files`는 `scripts` 전체가 아니라 개별 경로를 나열한다 — 추가하지 않으면 스크립트가 tarball에 들어가지 않고, 소비자의 `apply from:`이 파일 없음으로 실패한다.
 
-- [ ] **Step 6: tarball 게이트에 경로를 등록하고 포함을 확인한다**
+- [x] **Step 6: tarball 게이트에 경로를 등록하고 포함을 확인한다**
 
 `.github/scatterlab/allowed-tarball-diff.txt` 끝에 추가한다:
 
@@ -547,7 +549,7 @@ tar tzf packages/react-native/*.tgz | grep 'scripts/android/'
 
 기대: `package/scripts/android/scatterlab-prebuilt-maven.gradle` 한 줄이 나오고, 게이트 통과.
 
-- [ ] **Step 7: 커밋**
+- [x] **Step 7: 커밋**
 
 ```bash
 rm -f packages/react-native/*.tgz
@@ -584,7 +586,7 @@ MSG
 - Consumes: Task 1의 `visibleTextEnd` 심볼 (`verify_symbol` 입력의 첫 사용값), Task 2가 정한 태그·에셋 이름·tar 루트 규약
 - Produces: 릴리스 `prebuilt-android-<version>` 에 `react-native-android-maven-<version>.tar.gz` + `.sha256`
 
-- [ ] **Step 1: 워크플로를 쓴다**
+- [x] **Step 1: 워크플로를 쓴다**
 
 `.github/workflows/scatterlab-prebuild-android.yml`:
 
@@ -815,7 +817,7 @@ jobs:
           echo "release $TAG is consumable"
 ```
 
-- [ ] **Step 2: 워크플로 문법을 검사한다**
+- [x] **Step 2: 워크플로 문법을 검사한다**
 
 ```bash
 cd ~/GitHub/react-native/.claude/worktrees/daewoon+android-prebuilt
@@ -827,7 +829,7 @@ command -v actionlint >/dev/null && actionlint .github/workflows/scatterlab-preb
 
 `runner` 컨텍스트를 잡 레벨 `env:`에 쓰면 워크플로 파싱이 HTTP 422로 실패하고 증상이 "워크플로가 없다"처럼 보인다. 이 파일은 `RUNNER_TEMP`를 스텝 안에서만 쓴다 — 옮기지 않는다.
 
-- [ ] **Step 3: `CLAUDE.md`의 배포 절차에 Android를 넣는다**
+- [x] **Step 3: `CLAUDE.md`의 배포 절차에 Android를 넣는다**
 
 `## iOS prebuilt` 섹션 바로 앞에 새 섹션을 넣는다:
 
@@ -848,7 +850,7 @@ gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native -
 
 같은 편집에서 `## 배포` 섹션과 `## iOS prebuilt` 섹션의 `0.86.2` 문자열을 현재 라인인 `0.87.1`로 고친다 (작업 브랜치 · 예시 버전). 이 파일이 실행자에게 잘못된 브랜치를 지시하고 있다.
 
-- [ ] **Step 4: 커밋**
+- [x] **Step 4: 커밋**
 
 ```bash
 git add .github/workflows/scatterlab-prebuild-android.yml CLAUDE.md

@@ -108,6 +108,8 @@ apply(from = "../../../node_modules/react-native/scripts/android/scatterlab-preb
 
 소비자 쪽 확인은 `--info` 실행에서 해석된 AAR 경로가 `~/.gradle/scatterlab-react-native/<version>/maven` 아래인지 보는 것으로 족하다. 새 fork 버전으로 처음 빌드할 때 한 번 본다.
 
+**소비자 스크립트 스모크 테스트** — `.github/scatterlab/__tests__/android-prebuilt-consumer-test.sh`가 `prepare` 잡에서 (`actions/setup-java` 후) 매 워크플로 실행마다 자동으로 돈다. 업스트림 버전 no-op, 릴리스 없을 때 abort(네트워크 정상·DNS 차단 양쪽), warm 캐시 오프라인 재사용 4개 분기를 확인한다 — 좌표가 버전 간 동일해 심볼 게이트만으로는 소비자 쪽 fail-closed를 보장 못 하므로, 이 스크립트가 그 나머지 절반을 지킨다.
+
 **단위 테스트** — 수정마다 ReactAndroid의 Robolectric 테스트를 붙인다.
 
 **엔드투엔드** — 소비자에서 release APK를 빌드해 실기기로 증상을 확인한다. 시뮬레이터·에뮬레이터로 대체하지 않는다.
