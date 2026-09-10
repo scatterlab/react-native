@@ -38,11 +38,15 @@ class ReactNativePodsUtils
         status = $?
         http_code = http_code.strip
         curl_exit = status.exitstatus
+        # URI() raises on a URL it cannot parse and quotes the whole URL in the
+        # message - the one string this method exists to keep out of the logs.
+        # ENTERPRISE_REPOSITORY is user-supplied, so that input is reachable.
+        host = (URI(tarball_url).host rescue nil) || "unknown host"
         {
             :ok => status.success? && http_code == "200",
             :http_code => http_code,
             :curl_exit => curl_exit,
-            :summary => "#{URI(tarball_url).host}: HTTP #{http_code}, curl exit #{curl_exit}",
+            :summary => "#{host}: HTTP #{http_code}, curl exit #{curl_exit}",
         }
     end
 

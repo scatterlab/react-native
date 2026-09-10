@@ -162,6 +162,24 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         assert_false(result[:summary].include?("private"))
     end
 
+    # ENTERPRISE_REPOSITORY is a documented user-supplied base URL, so the value
+    # reaching the probe is not always parseable. URI::InvalidURIError quotes the
+    # whole URL in its message, which is exactly what must never be logged.
+    def test_probeArtifact_whenTheUrlIsUnparseable_reportsItWithoutRaisingOrEchoingTheUrl
+        result = ReactNativePodsUtils.probe_artifact("https://user:s3cr3t@ho|st/artifact.tar.gz")
+
+        assert_false(result[:ok])
+        assert_false(result[:summary].include?("s3cr3t"))
+        assert_false(result[:summary].include?("artifact.tar.gz"))
+    end
+
+    def test_probeArtifact_whenTheUrlIsBlank_reportsItWithoutRaising
+        result = ReactNativePodsUtils.probe_artifact("")
+
+        assert_false(result[:ok])
+        assert_true(result[:summary].include?("unknown host"))
+    end
+
     # ============================================= #
     # TEST - setup_react_native_dependencies        #
     # ============================================= #
@@ -188,6 +206,45 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         assert_raise(SystemExit) do
             ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", "0.87.1-scatterlab.2")
         end
+    end
+
+    # The normal consumer path. A false abort here fails every pod install, so it
+    # is worth a test even though the assertion is a negative.
+    def test_setupDeps_whenTheArtifactIsAvailable_doesNotAbort
+        ENV["RCT_USE_RN_DEP"] = "1"
+        ENV["RCT_USE_PREBUILT_RNCORE"] = "1"
+        server = start_server { ["200 OK", ""] }
+
+        begin
+            setup_deps_against(server)
+        rescue SystemExit => error
+            flunk("setup aborted on an available artifact: #{error.message}")
+        rescue StandardError
+            # Whatever the tarball download does next needs a CocoaPods sandbox
+            # and is out of scope; the invariant check already let this through.
+        end
+
+        assert_false(ReactNativeDependenciesUtils.build_react_native_deps_from_source())
+    end
+
+    # A local xcframework satisfies the prebuilt side without any artifact, so
+    # the pair stays consistent and the invariant must not fire.
+    def test_setupDeps_whenALocalXcframeworkIsSupplied_doesNotAbort
+        local = File.join(ENV["TMPDIR"] || "/tmp", "rn-local-deps-#{Process.pid}.tar.gz")
+        File.write(local, "")
+        ENV["RCT_USE_LOCAL_RN_DEP"] = local
+        ENV["RCT_USE_RN_DEP"] = "0"
+        ENV["RCT_USE_PREBUILT_RNCORE"] = "1"
+
+        begin
+            ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", "0.87.1-scatterlab.2")
+        rescue SystemExit => error
+            flunk("setup aborted on a local xcframework: #{error.message}")
+        end
+
+        assert_false(ReactNativeDependenciesUtils.build_react_native_deps_from_source())
+    ensure
+        File.unlink(local) if File.exist?(local)
     end
 
     # Source core + source deps is a consistent pair, so upstream's fallback stays.

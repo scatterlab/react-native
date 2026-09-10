@@ -135,13 +135,23 @@ class ReactNativeDependenciesUtils
             if @@build_from_source && ENV["RCT_USE_LOCAL_RN_DEP"] && !use_local_xcframework
                 rndeps_log("No local xcframework found, reverting to building from source.")
             end
-            ## Prebuilt core and prebuilt deps are one choice, not two: the
-            ## React-Core-prebuilt podspec depends on the ReactNativeDependencies
-            ## pod, which exists only in prebuilt-deps mode. Falling back to source
-            ## here while the core stays prebuilt yields a pod graph CocoaPods
-            ## cannot resolve, and a retry with --repo-update or --clean-install
-            ## re-runs this same probe, so it can never recover. Stop while the
-            ## reason is still known.
+            ## Prebuilt core and prebuilt deps are one choice, not two, and a
+            ## half-fallback is bad whichever way it lands. With a warm Pods/,
+            ## CocoaPods reuses the React-Core-prebuilt spec stored in
+            ## Pods/Local Podspecs from the previous, prebuilt-deps install - a
+            ## :podspec external source is not re-evaluated while a stored copy
+            ## exists - so it still demands the ReactNativeDependencies pod this
+            ## install no longer declares, and resolution fails. From a clean
+            ## Pods/ it resolves instead, and links a core compiled against the
+            ## prebuilt binaries with third-party symbols built from source; that
+            ## one ships without an error at all. Neither --repo-update nor
+            ## --clean-install recovers: the first refreshes spec repos, the
+            ## second only the Xcode project cache. Stop while the reason is
+            ## still known.
+            ## `!= "0"` and not `== "1"`: react_native_pods.rb normalises both
+            ## flags, but a Podfile calling this directly leaves them unset, and
+            ## an unset prebuilt-core flag means prebuilt. Erring toward the abort
+            ## is the safe direction.
             if @@build_from_source && ENV["RCT_USE_PREBUILT_RNCORE"] != "0"
                 abort("[ReactNativeDependencies] Refusing to build the dependencies from source while React Native Core is prebuilt: #{prebuilt_unavailable_reason()}")
             end
