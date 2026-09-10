@@ -63,6 +63,29 @@ react-native-artifacts-0.86.2-reactnative-core-debug.tar.gz               → 20
 
 `rncore.rb`/`rndependencies.rb`는 공유 코드가 없어 각각 고쳐야 한다. 두 파일 모두 URL 빌더는 stable 1개뿐이고(`stable_tarball_url` / `release_tarball_url`), 로컬 파일명은 `download_*_tarball`의 별도 `version` 인자에서 나온다 — 즉 서로 간섭하지 않는다.
 
+### artifact probe는 fail-closed다
+
+`ReactNativePodsUtils.probe_artifact`(`scripts/cocoapods/utils.rb`)가 core·deps 양쪽의 HEAD 조회를 담당한다. 두 파일이 이미 공통으로 require하는 유일한 파일이라 여기 둔다. `--disable`로 러너 `~/.curlrc`를 무시하고, 최대 3회(연결 10초, 요청당 30초, 1초 간격) 시도한 뒤 HTTP 상태와 curl 종료 코드를 함께 돌려준다. 404도 재시도 대상이다 — artifact 게시 직후의 전파 지연을 흡수하기 위해서다. `--max-time`은 전체가 아니라 **시도당**이라 응답이 멈춘 호스트에서는 probe 한 번이 최대 ~92초다. 느린 `pod install`을 hang으로 오판하지 않는다.
+
+`--disable`이 막는 건 `--write-out` 같은 우리 플래그가 아니다 — curl은 config를 먼저, 커맨드라인을 나중에 읽어 커맨드라인이 이긴다. 막히는 건 우리가 지정하지 않는 설정, 특히 `proxy`·`resolve`·`insecure`처럼 **probe가 호스트에 닿는지 자체를 바꾸는** 것들이다. probe의 로그·에러 메시지에는 **호스트만** 남는다 — URL 경로·쿼리와 curl stderr에는 프록시나 엔터프라이즈 미러의 자격증명이 실린다. 이건 probe에 한정된 보장이다: 조회가 성공해 실제 다운로드로 넘어가면 상류 코드(`rndependencies.rb`의 `Using tarball from URL:`)가 전체 URL을 그대로 찍는다.
+
+한쪽만 내려간 조합은 **중단한다**. 어느 쪽으로 굴러도 나쁘기 때문이다.
+
+- **warm `Pods/`**: CocoaPods가 `Pods/Local Podspecs`에 저장된 이전(prebuilt-deps) install의 `React-Core-prebuilt` 스펙을 재사용한다 — `:podspec` external source는 저장본이 있는 한 재평가되지 않는다(`installer/analyzer.rb`의 refetch 조건: 저장본 없음 / `:path` 소스 / pod 디렉터리 없음 / checkout 옵션 변경). 그 스펙은 이번 install이 더는 선언하지 않는 `ReactNativeDependencies` pod을 요구하므로 해석이 깨진다: `Unable to find a specification for 'ReactNativeDependencies' depended upon by 'React-Core-prebuilt'`. 2026-09-09 배포 실패가 이 경우다(실패 로그에 `React-Core-prebuilt`의 `Fetching podspec for` 줄이 없고 source 모드 third-party pod만 fetch됐다).
+- **clean `Pods/`**: 반대로 **해석이 성공해버린다**. `s.dependency "ReactNativeDependencies"`는 `rndependencies.rb:49` 한 곳뿐이고 source 분기에서는 glog/boost/…를 대신 선언하기 때문이다. 그러면 prebuilt 바이너리로 컴파일된 core가 source로 빌드된 third-party 심볼과 링크된다 — 에러가 없어서 더 나쁘다.
+
+`--repo-update`·`--clean-install`은 둘 다 복구하지 못한다: 전자는 spec repo만, 후자는 Xcode 프로젝트 캐시만 갱신하고(`installer.rb`의 `clean_install`은 `ProjectCacheAnalyzer`로만 흐른다) 저장된 podspec도 probe 결과도 건드리지 않는다. 저장본을 실제로 무효화하는 건 `pod update <name>`이나 `rm -rf Pods`뿐이다.
+
+검사는 `ReactNativeDependenciesUtils.assert_prebuilt_pair`이고 **`setup_rncore` 끝에서** 불린다. `use_react_native!`가 deps를 먼저(`react_native_pods.rb:145`) core를 나중에(`:148`) 돌리므로 그 시점이 두 모드가 다 확정되는 첫 지점이다. 판정은 **core가 실제로 계산한 결과**로 한다 — `RCT_USE_PREBUILT_RNCORE`를 읽으면 두 방향으로 틀린다: `RCT_TESTONLY_RNCORE_TARBALL_PATH`가 있으면 플래그가 `0`이어도 core는 prebuilt이고(`rncore.rb:76-78`), `FORK_REQUIRES_OWN_PREBUILT = false`인 버전에서 artifact를 못 구하면 플래그가 `1`이어도 core는 source로 내려간다(그건 정합한 쌍이라 막으면 안 된다).
+
+`RCT_USE_RN_DEP=0` + prebuilt core 조합도 같은 문으로 걸린다. `RCT_USE_PREBUILT_RNCORE=0`이고 로컬 tarball도 없으면 둘 다 source로 가는 정합한 조합이라 상류의 폴백을 그대로 둔다.
+
+**core와 deps는 호스트가 다르다** — core는 이 fork의 GitHub 릴리스, deps는 Maven Central이다. 한쪽만 흔들려도 모드가 갈라지는 이 구조가 fork 고유의 위험이라 조용한 폴백을 여기서 막는다. core 쪽은 `FORK_REQUIRES_OWN_PREBUILT`가 이미 abort시키지만, 404(릴리스 미게시)와 전송 실패를 구분해 각각 다른 조치를 안내한다.
+
+회귀 테스트는 `scripts/cocoapods/__tests__/prebuilt_probe-test.rb`이며 실제 로컬 HTTP 서버를 띄워 curl을 그대로 돌린다(리다이렉트·재시도·404·전송 실패·curlrc 오염·모드 혼합 거부). `[scatterlab] Test prebuilt probe` 워크플로가 `scatterlab/**` push와 `scripts/cocoapods/**` PR에서 이 파일과 `rndependencies-test.rb`를 실행한다 — 상류 `test-all`의 Ruby 잡은 `github.repository` 게이트와 선행 prebuild 잡에 막혀 이 fork에서 돌지 않는다.
+
+`run_ruby_tests.sh`를 그대로 쓰지 않는 이유: 이 태그에서 그 전량 집합은 어디서도 통과하지 않는다. `spm-test.rb`가 실제 cocoapods gem을 require하는데 그 gem의 `Pod::UI`·`Pod::Executable`이 `PodMock`과 **어느 로드 순서로도** 충돌하고(`wrong argument type Class (expected Module)`), 단독 실행도 실패한다(`InstallerStub`에 `spm.rb`가 부르는 `aggregate_targets`가 없다). 나머지 몇 파일은 이웃 파일이 먼저 정의하는 상수에 의존한다. 전부 이 fork가 건드리지 않는 상류 파일이라 상류에 남긴다.
+
 ### 절대 건드리지 않는 것
 
 | 대상 | 현재 값 | 건드리면 |
