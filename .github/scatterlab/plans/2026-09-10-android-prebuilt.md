@@ -943,7 +943,9 @@ gh run watch --repo scatterlab/react-native
 
 - [ ] **Step 2: 버전을 올린다**
 
-`packages/react-native/package.json` 의 `version` 만 `0.87.1-scatterlab.4` 으로 바꾼다. `ReactAndroid/gradle.properties` 의 `VERSION_NAME`, sibling 핀, `ReactNativeVersion.*` 은 건드리지 않는다. 커밋 후 `scatterlab/0.87.1` 에 머지한다.
+`packages/react-native/package.json` 의 `version` 만 `0.87.1-scatterlab.4` 으로 바꾼다. `ReactAndroid/gradle.properties` 의 `VERSION_NAME`, sibling 핀, `ReactNativeVersion.*` 은 건드리지 않는다. 커밋 후 PR로 `scatterlab/0.87.1` 에 머지한다 (직접 push 금지).
+
+기대: `git show scatterlab/0.87.1:packages/react-native/package.json | grep '"version"'` 이 `0.87.1-scatterlab.4` 를 보여준다. Step 3 의 `scatterlab-prebuild-android.yml` 은 `--ref scatterlab/0.87.1` 체크아웃의 이 값과 `-f version=` 이 다르면 `prepare` 에서 하드 실패한다.
 
 - [ ] **Step 3: prebuilt 릴리스 두 개를 만든다 (npm 보다 먼저)**
 

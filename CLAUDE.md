@@ -10,7 +10,7 @@ zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 
 - 작업 브랜치: **`scatterlab/0.87.1`** (기본 브랜치, 태그 `v0.87.1`에서 분기)
 - 지난 라인: `scatterlab/0.86.2`, `scatterlab/0.87.0` — 남겨두지만 새 작업은 올리지 않는다
 - 계측 브랜치: `scatterlab/0.86.2-ime-probe` — `SLIME` 로그가 붙은 실험용. 0.86.2 라인에 묶여 있고 **배포 대상 아님**
-- 산출물: npm `@scatterlab/react-native@0.87.1-scatterlab.N` + GitHub Release `prebuilt-ios-<version>`
+- 산출물: npm `@scatterlab/react-native@0.87.1-scatterlab.N` + GitHub Release `prebuilt-ios-<version>` + `prebuilt-android-<version>`(모든 fork 버전에 필수)
 - 소비: npm alias — `"react-native": "npm:@scatterlab/react-native@<version>"`
 
 `main`은 상류 동기화용으로만 둔다. **`main`에 push하지 않는다** — 상류 워크플로가 발화한다.
@@ -23,7 +23,7 @@ zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 
 | `@react-native/*` sibling 7개 exact 핀 변경 | `@react-native/codegen@<fork버전>`을 npm에서 찾다 install 실패. 8개 패키지를 다 배포해야 함 |
 | `scripts/releases/set-version.js` / `set-rn-artifacts-version.js` 실행 | 전자는 sibling 범위를 전부 재작성, 후자는 `VERSION_NAME`을 재작성. 둘 다 위 두 항을 정확히 깨뜨린다 |
 | `package.json`의 `bin` 변경 | zeta의 codepush 배포가 `node_modules/.bin/react-native` 심링크를 복사한다 |
-| `v*` 태그 생성 | 상류 `publish-npm.yml`의 글롭 `v0.*.*`가 `v0.87.1-무엇이든`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없다. 태그는 `prebuilt-ios-` / `sl-` 처럼 `v`로 시작하지 않게 |
+| `v*` 태그 생성 | 상류 `publish-npm.yml`의 글롭 `v0.*.*`가 `v0.87.1-무엇이든`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없다. 태그는 `prebuilt-ios-` / `prebuilt-android-` / `sl-` 처럼 `v`로 시작하지 않게 |
 | 버전 접미사에 대시 2개 | `-scatterlab.N` 고정. fork 접미사 제거 정규식이 greedy하다 |
 | 릴리스 에셋 clobber | warm `~/Library/Caches/ReactNative`를 가진 개발자가 낡은 xcframework를 영구히 쓴다. 새 `-scatterlab.N`을 낸다 |
 
@@ -39,7 +39,7 @@ gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scat
 - 인증은 **npm Trusted Publishing (OIDC)** — 토큰 없음. `permissions: id-token: write` + `node-version: 24`(핀 제거 금지, `ubuntu-latest` 기본 npm 10.9.8은 요구치 11.5.1 미달)
 - npm은 **workflow_ref 클레임을 최상위 워크플로 파일명과 대조**하고 패키지당 trusted publisher는 1개다. `npm publish`를 재사용/컴포짓 워크플로로 옮기면 인증이 깨진다
 - **게이트**: tarball이 상류 동일 base 버전과 `allowed-tarball-diff.txt` 밖에서 다르면 실패. 소스를 새로 건드리면 그 파일에 경로를 추가해야 한다
-- publish 직후 **~1분간 install이 `ETARGET`으로 실패**한다(packument와 dist-tags 캐시가 별개). 버전 bump PR은 install 확인 후에
+- publish 직후 **~1분간 install이 `ETARGET`으로 실패**한다(packument와 dist-tags 캐시가 별개). **소비자(zeta) 쪽 핀 bump PR**은 install 확인 후에 — fork 자체의 `version` 필드 bump는 이것과 다른 얘기로, 이 워크플로를 돌리기 **전에** 이미 머지돼 있어야 한다(아래 "Android prebuilt" 참조)
 
 ## Android prebuilt
 
@@ -49,6 +49,8 @@ Android는 `com.facebook.react:react-android:<VERSION_NAME>`을 Maven Central에
 gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
   -f version=0.87.1-scatterlab.N -f verify_symbol=<이번에 추가한 식별자> -f dry_run=false
 ```
+
+`--ref`로 체크아웃하는 브랜치의 `packages/react-native/package.json` `version`이 **이미** `-f version=`과 같아야 한다 — 워크플로의 `prepare`가 이 둘을 대조하고, 실제 릴리스(`dry_run=false`)에서 다르면 하드 실패한다. 즉 fork의 버전 bump 커밋은 이 명령을 돌리기 전에 먼저 머지돼 있어야 한다.
 
 **순서 제약**: prebuilt 릴리스가 npm보다 먼저 있어야 한다. 없으면 소비자 Gradle configure가 abort한다. 설계·함정은 [`.github/scatterlab/android-prebuilt.md`](.github/scatterlab/android-prebuilt.md).
 

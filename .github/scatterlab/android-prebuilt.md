@@ -41,9 +41,16 @@ iOS의 warm `~/Library/Caches/ReactNative` 함정과 같은 모양이지만, 여
 
 ## 빌드 — `scatterlab-prebuild-android.yml`
 
-`workflow_dispatch(version)`. `prepare` → `build` → `verify` 3잡, iOS 워크플로와 같은 골격.
+`workflow_dispatch(version, verify_symbol, dry_run)`. `prepare` → `build` → `verify` 3잡, iOS 워크플로와 같은 골격.
+
+같은 버전에 대한 두 번의 dispatch가 겹치지 않도록 `concurrency: group: scatterlab-prebuild-android-<version>`으로 **큐잉**한다(취소가 아니라 대기). 취소를 택하면 먼저 돌던 실행이 에셋만 올리고 draft를 정리하지 못한 채 죽을 수 있는데, 그 상태가 뒤 실행이 잠깐 기다리는 것보다 나쁘다.
 
 러너는 `arc-messenger-dev`(Linux). GitHub-hosted 러너는 org IP allow list 밖이라 인증된 `api.github.com` 쓰기가 403이다.
+
+`prepare`는 빌드 전에 버전 두 개를 맞대본다.
+
+1. `ReactAndroid/gradle.properties`의 `VERSION_NAME`이 `version` 입력에서 뽑은 upstream base와 같은지. AAR 좌표가 이 값으로 나가므로, 어긋나면 존재하지 않는 좌표를 빌드하게 된다.
+2. 체크아웃한 `packages/react-native/package.json`의 `version`이 `version` 입력과 같은지. `dry_run=false`에서는 **하드 실패**다 — 소비자 스크립트가 만드는 다운로드 URL은 그 `package.json` 버전으로 정해지므로, 둘이 다르면 이 태그를 받은 소비자가 다른 버전용 바이너리를 받는다. `dry_run=true`에서는 경고만 남긴다. 그래서 fork의 `version` 필드 bump는 **이 워크플로를 실제로 돌리기 전에 먼저 머지돼 있어야 한다.**
 
 핵심 스텝:
 
@@ -62,7 +69,7 @@ env ORG_GRADLE_PROJECT_react.internal.useHermesStable=true \
 
 에셋 업로드는 **clobber 하지 않는다.** 소비자 캐시가 버전별로 스코프돼 있어 같은 태그의 에셋을 갈아끼우면 이미 받아 둔 개발자·러너는 영구히 옛 것을 쓴다. 새 `-scatterlab.N`을 낸다.
 
-`build`는 릴리스를 **draft**로 만든다(`gh release create --draft`). draft는 push 권한자에게만 보이고 에셋 다운로드 URL이 그 외에는 404다 — `verify`가 전부 통과할 때까지 미검증 릴리스가 소비자에게 노출되지 않는다. 같은 태그가 이미 있으면: draft면 그대로 재사용해 에셋을 마저 올리고, 이미 **공개**된 릴리스면 재실행을 abort한다(소비자가 이미 본 릴리스에 검증 안 된 에셋을 얹지 않기 위해서다).
+`build`는 릴리스를 **draft**로 만든다(`gh release create --draft`). draft는 push 권한자에게만 보이고 에셋 다운로드 URL이 그 외에는 404다 — `verify`가 전부 통과할 때까지 미검증 릴리스가 소비자에게 노출되지 않는다. 같은 태그가 이미 **공개**된 릴리스로 있으면 재실행을 abort한다(소비자가 이미 본 릴리스에 검증 안 된 에셋을 얹지 않기 위해서다). draft로 있으면 — 이전 실행이 에셋을 올리다 `verify`에서 실패해 남은 경우다 — 그 draft를 **삭제하고 새로 만든다.** draft는 push 권한 없는 쪽에는 애초에 존재한 적이 없어 지워도 안전하고, 재사용하는 대신 지우고 다시 만들어야 부분 실행에서 올라간 에셋(예: debug AAR만 올라간 상태)이 이번 실행 결과와 섞여 남지 않는다.
 
 ## 소비자 배선
 
@@ -70,13 +77,15 @@ env ORG_GRADLE_PROJECT_react.internal.useHermesStable=true \
 
 동작 순서:
 
-1. `packages/react-native/package.json`의 `version`을 읽는다. `^\d+\.\d+\.\d+-scatterlab\.\d+$`가 아니면 **no-op** — 업스트림 react-native로도 이 스크립트가 붙은 채 동작해야 한다.
-2. `~/.gradle/scatterlab-react-native/<version>/maven`이 이미 있으면 그대로 쓴다.
-3. 없으면 `https://github.com/scatterlab/react-native/releases/download/prebuilt-android-<version>/react-native-android-maven-<version>.tar.gz`를 받아 `.sha256`으로 검증하고 임시 디렉터리에 푼 뒤 최종 경로로 rename 한다. 부분 추출된 트리가 성공한 캐시로 남으면 안 된다.
+1. `packages/react-native/package.json`을 읽는다. `name`이 `@scatterlab/react-native`가 아니면 **no-op** — 업스트림 react-native로도 이 스크립트가 붙은 채 동작해야 한다. 우리 패키지인데 `version`이 `^\d+\.\d+\.\d+-scatterlab\.\d+$`를 만족하지 않으면(예: rc 접미사) **빌드를 중단한다** — 그대로 두면 업스트림 AAR로 조용히 넘어간다.
+2. 캐시 판정은 디렉터리 존재가 아니라 `~/.gradle/scatterlab-react-native/<version>/maven/com/facebook/react/react-android/<base>/react-android-<base>.pom` 파일의 존재다. 중단된 추출이나 부분 정리로 디렉터리만 남은 트리를 warm으로 오판하지 않기 위해서다. 그 파일이 있으면 그대로 쓴다.
+3. 없거나 깨져 있으면(캐시 디렉터리를 지운 뒤) `https://github.com/scatterlab/react-native/releases/download/prebuilt-android-<version>/react-native-android-maven-<version>.tar.gz`를 받아 `.sha256`으로 검증하고, 최종 경로 옆에 만든 임시 디렉터리에 푼 뒤 rename으로 옮긴다. 부분 추출된 트리가 성공한 캐시로 남으면 안 된다.
 4. 릴리스가 없거나 sha가 어긋나면 **빌드를 중단한다.** 메시지는 `rncore.rb:378`과 같은 형태로 — 무엇이 없고 어떤 워크플로를 돌려야 하는지 적는다.
 5. `gradle.beforeProject`에서 각 프로젝트에 `react.internal.mavenLocalRepo`를 그 경로로 세팅한다.
 
 캐시가 이미 있으면 네트워크를 타지 않으므로 `--offline` 빌드도 그대로 된다. 캐시가 없는데 네트워크가 없으면 abort한다 — 조용히 업스트림으로 떨어뜨리지 않는다.
+
+**`SCATTERLAB_PREBUILT_BASE_URL`** — 다운로드 base URL을 덮어쓰는 환경변수. fork npm 패키지에 그대로 실려 있어 모든 소비자 빌드가 이 코드를 거친다. 오직 소비자 스크립트 스모크 테스트가 로컬 fixture 서버를 가리키기 위한 시임이라, 값의 host가 루프백(`127.0.0.1`, `[::1]`, `localhost`)일 때만 적용된다. `.sha256` 사이드카도 같은 base에서 받으므로, 루프백이 아닌 값을 그냥 받아들이면 아카이브와 그걸 검증할 체크섬을 같은 곳에서 받게 돼 무결성 검사가 아무것도 증명하지 못한다 — 그래서 루프백이 아니면 실제 릴리스로 폴백하지 않고 **빌드를 중단한다.**
 
 그러면 RNGP가(`DependencyUtils.kt:56-87`):
 
@@ -99,16 +108,18 @@ apply(from = "../../../node_modules/react-native/scripts/android/scatterlab-preb
 
 - 에셋 이름이 정확히 기대한 2개인지 (`gh release view --json assets --jq '.assets[].name'` diff). GitHub은 예상 밖 문자가 든 에셋 이름을 재작성한다. REST의 "get a release by tag"(`gh api repos/.../releases/tags/<tag>`)는 draft를 못 찾으므로 쓰지 않는다 — `gh release view`가 쓰는 GraphQL 경로만 draft를 태그로 찾는다.
 - tarball을 받아 sha256이 맞는지. 릴리스가 이 시점엔 아직 draft라 공개 다운로드 URL이 404다 — `gh release download`로 `GH_TOKEN` 인증된 API를 거쳐 받는다.
+- 그 sha256이 `build` 잡이 산출한 값과 **같은지도** 확인한다. `.sha256` 사이드카는 아카이브가 자기 자신과 일치한다는 것만 증명하고, 이 비교라야 그 아카이브가 **이 실행이 만든** 것이라는 걸 증명한다.
+- 릴리스의 `targetCommitish`가 이 실행의 `$GITHUB_SHA`와 같은지. 같은 태그를 다른 커밋에서 두 번 돌리면 릴리스는 하나만 존재하므로, 이 검사가 없으면 나중 실행의 `verify`가 앞선 실행이 만든(또는 그 반대의) 에셋을 검증 없이 승격시킬 수 있다.
 - 트리에 `com/facebook/react/react-android/<base>/`의 `react-android-<base>-debug.aar`, `-release.aar`, `.module`, `.pom`이 모두 있는지.
 - 위 검사가 전부 통과한 뒤에야 `gh release edit --draft=false`로 릴리스를 공개한다. 실패하면 draft로 남아 소비자에게 노출되지 않는다.
 
 **패치가 실려 있는지 증명하는 게이트** — "내용이 바뀌었는데 식별자가 같다" 계열 사고를 막는 유일한 수단이다. 좌표가 버전 간 동일하므로 여기서는 필수다.
 
-`build` 잡에 `verify_symbol` 입력을 둔다. 이 버전이 도입한 식별자(예: 클래스명·메서드명)를 넣으면 이 잡이 릴리스 AAR의 `classes.jar`를 풀어 `javap -p`로 그 심볼을 찾고, 0건이면 실패한다. `javap` 자체가 실행되지 못한 경우(예: 툴체인 문제)는 "심볼 없음"과 구별되는 별도 에러로 실패한다 — 조용히 0건으로 수렴하지 않는다. 빈 값이면 이 검사를 건너뛰고 `::warning::`을 남긴다 — base bump처럼 새 심볼이 없는 릴리스도 있지만, 빈 값이 실수인 경우와 구별할 신호가 필요해서다.
+`workflow_dispatch`에 `verify_symbol` 입력을 둔다. `dry_run=false`인 실제 릴리스는 이 값이 **비어 있으면 `prepare`에서 실패한다** — 새 심볼이 없는 릴리스(예: base bump)라면 빈 값이 아니라 리터럴 `(none)`을 넣어야 한다. 값이 있고 `(none)`이 아니면 `build` 잡이 AAR 둘을 대조한다: 먼저 Maven Central의 **업스트림 base release AAR**에서 그 심볼을 찾아 0건인지 확인하고(있으면 실패 — 이 fork가 추가한 게 아니라는 뜻이므로 "패치가 들어 있다"의 증거가 못 된다), 그다음 이번에 빌드한 release AAR에서 같은 심볼을 찾아 1건 이상인지 확인한다. 둘 다 `classes.jar`를 풀어 `javap -p`로 디스어셈블한 뒤 문자열로 센다. `javap` 자체가 실행되지 못한 경우(예: 툴체인 문제)는 "심볼 없음"과 구별되는 별도 에러로 실패한다 — 조용히 0건으로 수렴하지 않는다. `(none)`이거나(`dry_run=true`에서) 빈 값이면 이 검사 전체를 건너뛰고 `::warning::`을 남긴다.
 
 소비자 쪽 확인은 `--info` 실행에서 해석된 AAR 경로가 `~/.gradle/scatterlab-react-native/<version>/maven` 아래인지 보는 것으로 족하다. 새 fork 버전으로 처음 빌드할 때 한 번 본다.
 
-**소비자 스크립트 스모크 테스트** — `.github/scatterlab/__tests__/android-prebuilt-consumer-test.sh`가 `prepare` 잡에서 (`actions/setup-java` 후) 매 워크플로 실행마다 자동으로 돈다. 업스트림 버전 no-op, 릴리스 없을 때 abort(네트워크 정상·DNS 차단 양쪽), warm 캐시 오프라인 재사용 4개 분기를 확인한다 — 좌표가 버전 간 동일해 심볼 게이트만으로는 소비자 쪽 fail-closed를 보장 못 하므로, 이 스크립트가 그 나머지 절반을 지킨다.
+**소비자 스크립트 스모크 테스트** — `.github/scatterlab/__tests__/android-prebuilt-consumer-test.sh`가 `prepare` 잡에서 (`actions/setup-java` 후) 매 워크플로 실행마다 자동으로 돈다. 확인하는 분기: 업스트림 패키지 no-op, 해석 불가능한 fork 버전(예: rc 접미사) abort, 릴리스 없을 때 abort(정상 네트워크·DNS 차단 양쪽), 빈 디렉터리만 있는 캐시는 warm으로 치지 않고 재다운로드, warm 캐시 오프라인 재사용, 루프백이 아닌 `SCATTERLAB_PREBUILT_BASE_URL` 거부, 그리고 로컬 HTTP fixture 서버로 실제 다운로드·추출까지 도는 콜드캐시 성공 경로 — 좌표가 버전 간 동일해 심볼 게이트만으로는 소비자 쪽 fail-closed를 보장 못 하므로, 이 스크립트가 그 나머지를 지킨다. 콜드캐시 케이스는 `python3`나 빈 로컬 포트가 없으면 건너뛴다 — 로컬에서는 `SKIP`으로 통과하지만, CI에서는 이 러너들이 우리 것이라 건너뜀 자체를 실패로 센다.
 
 **단위 테스트** — 수정마다 ReactAndroid의 Robolectric 테스트를 붙인다.
 
@@ -144,4 +155,4 @@ npm publish (scatterlab-publish.yml)
 | 릴리스 에셋 clobber | 이미 받아 둔 소비자가 영구히 옛 AAR을 쓴다 |
 | `isSnapshot=true` | 좌표에 `-SNAPSHOT`이 붙어 어긋난다 |
 | maven 트리에서 일부 아티팩트만 골라 올리기 | RNGP가 Maven Central에서 `com.facebook.react` 그룹을 통째로 제외하므로, 빠진 아티팩트는 어디서도 못 찾는다 |
-| 이미 **공개**된 릴리스에 재실행으로 에셋 업로드 | 소비자가 이미 본 릴리스에 검증 안 된 에셋을 얹게 된다. 재실행이 필요하면 draft 상태일 때만 재사용하고, 공개된 태그는 새 `-scatterlab.N`으로 간다 |
+| 이미 **공개**된 릴리스에 재실행으로 에셋 업로드 | 소비자가 이미 본 릴리스에 검증 안 된 에셋을 얹게 된다. 재실행은 draft 상태일 때만 허용되고(그 draft를 지우고 새로 만든다), 공개된 태그는 새 `-scatterlab.N`으로 간다 |
