@@ -118,43 +118,69 @@ def sha256 = { File file ->
 def cachedPom = new File(repoDir, "com/facebook/react/react-android/${base}/react-android-${base}.pom")
 
 if (!cachedPom.isFile()) {
-  // A cache that fails the check above is corrupt, not fatal - drop it and re-download so
-  // it self-heals. The delete also clears the way for the rename below.
-  repoDir.deleteDir()
-  // Staged next to the final location, not in /tmp: the move below has to be a rename on
-  // the same filesystem, or a half-copied tree can be left behind as a cache hit.
+  // Staged/locked next to the final location, not inside it: both the lock file and the
+  // staging dir have to survive repoDir itself being deleted and recreated below, and the
+  // staging move has to be a rename on the same filesystem.
   repoDir.parentFile.mkdirs()
-  def staging = java.nio.file.Files
-      .createTempDirectory(repoDir.parentFile.toPath(), 'staging')
-      .toFile()
+
+  // Two Gradle processes resolving the same fork version at once (ordinary on a CI runner
+  // with parallel jobs, or a developer running two builds) can both reach this branch
+  // together. Without serializing, one process's deleteDir() can pull repoDir out from under
+  // another that is still installing or reading it. A lock file beside repoDir - not inside
+  // it, since repoDir is what gets deleted and recreated - serializes the whole
+  // check-delete-download-extract-rename sequence per fork version. lock() blocks rather
+  // than failing: the process already holding it is doing the work this one was about to do.
+  def lockFile = new File(repoDir.parentFile, 'maven.lock')
+  def lockRaf = new java.io.RandomAccessFile(lockFile, 'rw')
   try {
-    def tarball = new File(staging, asset)
-    download(assetUrl, tarball)
+    def lock = lockRaf.channel.lock()
+    try {
+      // Re-check now that the lock is held: the previous holder may have just finished
+      // installing the cache, which makes the check above stale. Skipping this would only
+      // narrow the race, not close it.
+      if (!cachedPom.isFile()) {
+        // A cache that fails the check above is corrupt, not fatal - drop it and
+        // re-download so it self-heals. The delete also clears the way for the rename
+        // below.
+        repoDir.deleteDir()
+        def staging = java.nio.file.Files
+            .createTempDirectory(repoDir.parentFile.toPath(), 'staging')
+            .toFile()
+        try {
+          def tarball = new File(staging, asset)
+          download(assetUrl, tarball)
 
-    def expectedFile = new File(staging, "${asset}.sha256")
-    download("${assetUrl}.sha256", expectedFile)
-    def expected = expectedFile.text.trim().split(/\s+/)[0]
-    def actual = sha256(tarball)
-    if (expected != actual) {
-      fail("${asset} sha256 mismatch: expected ${expected}, got ${actual}.")
-    }
+          def expectedFile = new File(staging, "${asset}.sha256")
+          download("${assetUrl}.sha256", expectedFile)
+          def expected = expectedFile.text.trim().split(/\s+/)[0]
+          def actual = sha256(tarball)
+          if (expected != actual) {
+            fail("${asset} sha256 mismatch: expected ${expected}, got ${actual}.")
+          }
 
-    def extracted = new File(staging, 'maven')
-    extracted.mkdirs()
-    def proc = ['tar', '-xzf', tarball.absolutePath, '-C', extracted.absolutePath].execute()
-    def stderr = new StringBuffer()
-    proc.waitForProcessOutput(new StringBuffer(), stderr)
-    if (proc.exitValue() != 0) {
-      fail("extracting ${asset} failed: ${stderr}")
-    }
+          def extracted = new File(staging, 'maven')
+          extracted.mkdirs()
+          def proc = ['tar', '-xzf', tarball.absolutePath, '-C', extracted.absolutePath].execute()
+          def stderr = new StringBuffer()
+          proc.waitForProcessOutput(new StringBuffer(), stderr)
+          if (proc.exitValue() != 0) {
+            fail("extracting ${asset} failed: ${stderr}")
+          }
 
-    // Move only once the tree is complete: a half-extracted directory must never be left
-    // behind as a cache hit for the next build.
-    if (!extracted.renameTo(repoDir) && !cachedPom.isFile()) {
-      fail("could not move the extracted repository into ${repoDir}.")
+          // Move only once the tree is complete: a half-extracted directory must never be
+          // left behind as a cache hit for the next build.
+          if (!extracted.renameTo(repoDir) && !cachedPom.isFile()) {
+            fail("could not move the extracted repository into ${repoDir}.")
+          }
+        } finally {
+          staging.deleteDir()
+        }
+      }
+    } finally {
+      lock.release()
     }
   } finally {
-    staging.deleteDir()
+    lockRaf.close()
   }
 }
 

@@ -230,6 +230,115 @@ else
   httpd_pid=""
 fi
 
+# F: two builds racing a cold cache for the SAME version must not step on each other. The
+#    script now deletes repoDir when the content check fails, which is unsafe unless the
+#    whole check-delete-download-extract-rename sequence is serialized per version - this
+#    proves the lock added for that actually blocks-and-waits rather than just narrowing the
+#    window. The two builds use separate consumer project trees (so Gradle's own per-project
+#    locking cannot serialize them for us and mask a broken lock) but ONE shared
+#    GRADLE_USER_HOME, so they contend over the identical repoDir. The fixture server sleeps
+#    before every response to widen the window between "check the cache" and "install it" -
+#    on a fast loopback server the two builds might not overlap at all, and the case would
+#    pass by accident rather than by exercising anything.
+if ! command -v python3 >/dev/null 2>&1; then
+  skip "concurrent cold-cache builds share one lock" "python3 not found"
+else
+  race_version="0.87.1-scatterlab.993"
+  race_tag="prebuilt-android-$race_version"
+  race_asset="react-native-android-maven-$race_version.tar.gz"
+
+  race_fixture_root="$WORK/race-fixture-src"
+  mkdir -p "$race_fixture_root/com/facebook/react/react-android/0.87.1"
+  echo race-fixture-pom > "$race_fixture_root/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
+  race_fixtures_dir="$WORK/race-fixtures/$race_tag"
+  mkdir -p "$race_fixtures_dir"
+  tar -C "$race_fixture_root" -czf "$race_fixtures_dir/$race_asset" .
+  ( cd "$race_fixtures_dir" && sha256sum "$race_asset" | awk '{print $1}' > "$race_asset.sha256" )
+
+  cat > "$WORK/slow_server.py" <<'PYEOF'
+import http.server, os, sys, time
+
+os.chdir(sys.argv[1])
+
+class SlowHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        time.sleep(1)
+        super().do_GET()
+
+with http.server.HTTPServer(("127.0.0.1", 0), SlowHandler) as httpd:
+    print("port %d" % httpd.server_address[1], flush=True)
+    httpd.serve_forever()
+PYEOF
+  python3 -u "$WORK/slow_server.py" "$WORK/race-fixtures" > "$WORK/race-httpd.log" 2>&1 &
+  httpd_pid=$!
+  disown "$httpd_pid" 2>/dev/null || true
+  race_port=""
+  for _ in $(seq 1 50); do
+    race_port=$(sed -n 's/.*port \([0-9][0-9]*\).*/\1/p' "$WORK/race-httpd.log" | head -1)
+    [ -n "$race_port" ] && break
+    sleep 0.1
+  done
+
+  if [ -z "$race_port" ]; then
+    skip "concurrent cold-cache builds share one lock" "fixture server did not start"
+    cat "$WORK/race-httpd.log" >&2
+    kill "$httpd_pid" 2>/dev/null || true
+  else
+    race_dir_a=$(setup_case race-a "$race_version")
+    race_dir_b=$(setup_case race-b "$race_version")
+    race_home="$WORK/race-shared-gradlehome"
+    mkdir -p "$race_home"
+
+    set +e
+    ( cd "$race_dir_a/app" && GRADLE_USER_HOME="$race_home" SCATTERLAB_PREBUILT_BASE_URL="http://127.0.0.1:$race_port" "$GRADLE" --offline -q probe ) > "$WORK/race-a.log" 2>&1 &
+    race_pid_a=$!
+    ( cd "$race_dir_b/app" && GRADLE_USER_HOME="$race_home" SCATTERLAB_PREBUILT_BASE_URL="http://127.0.0.1:$race_port" "$GRADLE" --offline -q probe ) > "$WORK/race-b.log" 2>&1 &
+    race_pid_b=$!
+    wait "$race_pid_a"; race_rc_a=$?
+    wait "$race_pid_b"; race_rc_b=$?
+    set -e
+
+    kill "$httpd_pid" 2>/dev/null || true
+    httpd_pid=""
+
+    race_out_a=$(cat "$WORK/race-a.log")
+    race_out_b=$(cat "$WORK/race-b.log")
+    race_expected="PROBE_VALUE=$race_home/scatterlab-react-native/$race_version/maven"
+
+    if [ "$race_rc_a" -ne 0 ] || [ "$race_rc_b" -ne 0 ]; then
+      echo "FAIL - concurrent cold-cache builds both succeed"
+      echo "       exit codes: a=$race_rc_a b=$race_rc_b"
+      echo "       a output: $race_out_a"
+      echo "       b output: $race_out_b"
+      failures=$((failures + 1))
+    else
+      check "concurrent build a resolves the shared cache path" "$race_expected" "$race_out_a"
+      check "concurrent build b resolves the shared cache path" "$race_expected" "$race_out_b"
+    fi
+
+    race_landed="$race_home/scatterlab-react-native/$race_version/maven/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
+    if [ "$(cat "$race_landed" 2>/dev/null)" = "race-fixture-pom" ]; then
+      echo "ok   - concurrent builds land the fixture artifact intact (no half-extracted tree survives)"
+    else
+      echo "FAIL - concurrent builds land the fixture artifact intact"
+      echo "       expected file with content 'race-fixture-pom' at: $race_landed"
+      failures=$((failures + 1))
+    fi
+
+    # Proof the lock actually serialized the two builds rather than both racing the network:
+    # only the process that wins the lock should ever download the tarball. If both did, this
+    # is 2; the http.server access log lines are what leaked through -u stdout above.
+    race_downloads=$(grep -c "GET /$race_tag/$race_asset " "$WORK/race-httpd.log" || true)
+    if [ "$race_downloads" -eq 1 ]; then
+      echo "ok   - the tarball was downloaded exactly once across both concurrent builds"
+    else
+      echo "FAIL - the tarball was downloaded exactly once across both concurrent builds"
+      echo "       expected 1 GET for $race_asset, got $race_downloads"
+      failures=$((failures + 1))
+    fi
+  fi
+fi
+
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
 if [ "$skipped" -gt 0 ]; then
   echo "all cases passed ($skipped skipped)"

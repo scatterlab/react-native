@@ -203,7 +203,13 @@ jobs:
           # The baseline. One extra download on the release path, and the only thing that
           # makes a non-zero count below mean "this fork added it" rather than "it was
           # always there".
-          curl -fsSL --retry 3 -o "$WORK/upstream.aar" \
+          # --retry bounds attempt count, not time - an unresponsive Maven Central could
+          # otherwise stall this job indefinitely. --connect-timeout 15 is generous for a TCP
+          # handshake with a working host; --max-time 600 covers the whole curl invocation
+          # (all retries included), enough for this ~160MB release AAR to finish even on a
+          # slow-but-working CI network link (>270KB/s), while still bounding a truly hung
+          # transfer.
+          curl -fsSL --connect-timeout 15 --max-time 600 --retry 3 -o "$WORK/upstream.aar" \
             "https://repo1.maven.org/maven2/com/facebook/react/react-android/$BASE/react-android-$BASE-release.aar"
           count_symbol "$WORK/upstream.aar" upstream
           echo "'$SYMBOL' occurrences in the upstream $BASE release AAR: $COUNT"
