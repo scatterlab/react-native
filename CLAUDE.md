@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-`scatterlab/react-native` — `react/react-native`의 fork. 설계 문서는 [`.github/scatterlab/README.md`](.github/scatterlab/README.md), IME 검증 절차는 [`.github/scatterlab/ime-qa.md`](.github/scatterlab/ime-qa.md). 이 파일은 **여기서 작업할 때의 운용 규칙과 함정**만 담는다.
+`scatterlab/react-native` — `react/react-native`의 fork. 설계 문서는 [`.github/scatterlab/README.md`](.github/scatterlab/README.md), Android 아티팩트 배포는 [`.github/scatterlab/android-prebuilt.md`](.github/scatterlab/android-prebuilt.md), IME 검증 절차는 [`.github/scatterlab/ime-qa.md`](.github/scatterlab/ime-qa.md). 이 파일은 **여기서 작업할 때의 운용 규칙과 함정**만 담는다.
 
 ## 이 레포의 목적
 
