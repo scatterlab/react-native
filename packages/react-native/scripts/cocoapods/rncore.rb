@@ -36,6 +36,7 @@ class ReactNativeCoreUtils
     @@use_nightly = false
     @@download_dsyms = false
     @@fork_prebuilt_published = nil
+    @@last_probe = nil
 
     ## This fork builds its own React.xcframework and attaches it to a
     ## `prebuilt-ios-<version>` release. See .github/scatterlab/README.md.
@@ -366,6 +367,15 @@ class ReactNativeCoreUtils
         return "#{FORK_PREBUILT_RELEASE_URL}/prebuilt-ios-#{version}/react-native-artifacts-#{version}-reactnative-core-#{dsyms ? "dSYM-" : ""}#{build_type.to_s}.tar.gz"
     end
 
+    ## A 404 means nobody cut the release; anything else means we could not ask.
+    ## The two need different instructions, and the old message only gave the first.
+    def self.fork_prebuilt_failure_reason()
+        if @@last_probe[:http_code] == "404"
+            return "no prebuilt release exists (#{@@last_probe[:summary]}). Run the '[scatterlab] Build iOS prebuilt core' workflow for this version, or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source."
+        end
+        return "the release host did not answer (#{@@last_probe[:summary]}). Retry once it is reachable, or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source."
+    end
+
     ## One HEAD probe per pod install, against the debug framework only, so that all
     ## variants resolve to the same host: a release either carries the whole set or the
     ## whole set comes from upstream.
@@ -375,7 +385,7 @@ class ReactNativeCoreUtils
         if @@fork_prebuilt_published
             rncore_log("Using this fork's prebuilt artifacts (prebuilt-ios-#{version}).")
         elsif FORK_REQUIRES_OWN_PREBUILT
-            abort("[ReactNativeCore] This version carries iOS native changes that only exist in this fork's prebuilt framework, but no prebuilt release was found for #{version}. Run the '[scatterlab] Build iOS prebuilt core' workflow for this version, or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source.")
+            abort("[ReactNativeCore] This version carries iOS native changes that only exist in this fork's prebuilt framework, and its artifact did not resolve for #{version}: #{fork_prebuilt_failure_reason()}")
         else
             rncore_log("No prebuilt release for #{version}. Using the upstream artifacts for the base version.")
         end
@@ -512,10 +522,12 @@ class ReactNativeCoreUtils
     end
 
     # This function checks that ReactNativeCore artifact exists on the maven repo
+    ## The probe keeps its evidence so fork_prebuilt_published? can name the actual
+    ## failure. A bare false there reads as "nobody built this release yet".
     def self.artifact_exists(tarball_url)
-        # -L is used to follow redirects, useful for the nightlies
-        # I also needed to wrap the url in quotes to avoid escaping & and ?.
-        return (`curl -o /dev/null --silent -Iw '%{http_code}' -L "#{tarball_url}"` == "200")
+        @@last_probe = ReactNativePodsUtils.probe_artifact(tarball_url)
+        rncore_log("Artifact probe #{@@last_probe[:summary]}")
+        return @@last_probe[:ok]
     end
 
     def self.rncore_log(message, level = :info)

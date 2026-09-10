@@ -17,6 +17,35 @@ class ReactNativePodsUtils
         URI::File.build(path: URI::DEFAULT_PARSER.escape(path)).to_s
     end
 
+    # Checks whether a prebuilt artifact is published, and reports WHY when it is
+    # not. A bare boolean collapses "never published" into "could not reach the
+    # host", and a caller that reads that as absence silently degrades a whole
+    # install over one blip. Returns :ok, :http_code, :curl_exit and a :summary
+    # safe to log — proxies and enterprise mirrors carry credentials in the URL
+    # path, the query and curl's stderr, so none of the three appear in it.
+    # `--disable` ignores the runner's ~/.curlrc, which can rewrite --write-out.
+    # The argv form of IO.popen runs curl without a shell, so a URL carrying `&`
+    # or `?` needs no quoting; curl's own diagnostics are dropped rather than
+    # inherited, since they quote the URL back in full.
+    def self.probe_artifact(tarball_url)
+        http_code = IO.popen([
+            'curl', '--disable', '--head', '--location', '--fail',
+            '--retry', '2', '--retry-delay', '1', '--retry-all-errors',
+            '--connect-timeout', '10', '--max-time', '30',
+            '--silent', '--output', '/dev/null',
+            '--write-out', '%{http_code}', tarball_url
+        ], :err => File::NULL, &:read)
+        status = $?
+        http_code = http_code.strip
+        curl_exit = status.exitstatus
+        {
+            :ok => status.success? && http_code == "200",
+            :http_code => http_code,
+            :curl_exit => curl_exit,
+            :summary => "#{URI(tarball_url).host}: HTTP #{http_code}, curl exit #{curl_exit}",
+        }
+    end
+
     def self.warn_if_not_on_arm64
         if SysctlChecker.new().call_sysctl_arm64() == 1 && !Environment.new().ruby_platform().include?('arm64')
             Pod::UI.warn 'Do not use "pod install" from inside Rosetta2 (x86_64 emulation on arm64).'

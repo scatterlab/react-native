@@ -63,6 +63,16 @@ react-native-artifacts-0.86.2-reactnative-core-debug.tar.gz               → 20
 
 `rncore.rb`/`rndependencies.rb`는 공유 코드가 없어 각각 고쳐야 한다. 두 파일 모두 URL 빌더는 stable 1개뿐이고(`stable_tarball_url` / `release_tarball_url`), 로컬 파일명은 `download_*_tarball`의 별도 `version` 인자에서 나온다 — 즉 서로 간섭하지 않는다.
 
+### artifact probe는 fail-closed다
+
+`ReactNativePodsUtils.probe_artifact`(`scripts/cocoapods/utils.rb`)가 core·deps 양쪽의 HEAD 조회를 담당한다. 두 파일이 이미 공통으로 require하는 유일한 파일이라 여기 둔다. `--disable`로 러너 `~/.curlrc`를 무시하고, 최대 3회(연결 10초, 요청당 30초, 1초 간격) 시도한 뒤 HTTP 상태와 curl 종료 코드를 함께 돌려준다. 로그·에러 메시지에는 **호스트만** 남는다 — URL 경로·쿼리와 curl stderr에는 프록시나 엔터프라이즈 미러의 자격증명이 실린다.
+
+deps는 prebuilt를 못 구하면 **중단한다**. `React-Core-prebuilt`의 podspec이 `ReactNativeDependencies` pod에 의존하는데 그 pod은 prebuilt-deps 모드에서만 존재하므로, core가 prebuilt인 채 deps만 source로 내려가면 CocoaPods가 해석할 수 없는 그래프가 된다(`Unable to find a specification for 'ReactNativeDependencies' depended upon by 'React-Core-prebuilt'`). `--repo-update`·`--clean-install` 재시도는 같은 probe를 다시 돌려 같은 결과를 낳으므로 복구되지 않는다. 같은 이유로 `RCT_USE_RN_DEP=0` + prebuilt core 조합도 거부한다. `RCT_USE_PREBUILT_RNCORE=0`이면 둘 다 source로 가는 정합한 조합이라 상류의 폴백을 그대로 둔다.
+
+**core와 deps는 호스트가 다르다** — core는 이 fork의 GitHub 릴리스, deps는 Maven Central이다. 한쪽만 흔들려도 모드가 갈라지는 이 구조가 fork 고유의 위험이라 조용한 폴백을 여기서 막는다. core 쪽은 `FORK_REQUIRES_OWN_PREBUILT`가 이미 abort시키지만, 404(릴리스 미게시)와 전송 실패를 구분해 각각 다른 조치를 안내한다.
+
+회귀 테스트는 `scripts/cocoapods/__tests__/prebuilt_probe-test.rb`이며 실제 로컬 HTTP 서버를 띄워 curl을 그대로 돌린다(리다이렉트·재시도·404·전송 실패·curlrc 오염·모드 혼합 거부). `[scatterlab] Test CocoaPods scripts` 워크플로가 `scatterlab/**` push와 PR에서 Ruby 스위트 전체를 실행한다 — 상류 `test-all`의 Ruby 잡은 `github.repository` 게이트와 선행 prebuild 잡에 막혀 이 fork에서 돌지 않는다.
+
 ### 절대 건드리지 않는 것
 
 | 대상 | 현재 값 | 건드리면 |

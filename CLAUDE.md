@@ -53,6 +53,8 @@ gh workflow run scatterlab-prebuild-ios.yml --repo scatterlab/react-native --ref
 
 한 flavor만 성공한 **부분 릴리스가 위험하다**: probe는 debug 에셋만 확인하므로 통과시키고 release flavor에서 404가 난다. 그때는 에셋을 지우거나 새 `-scatterlab.N`을 낸다.
 
+**prebuilt 조회는 fail-closed다.** core와 deps는 한 덩어리로 움직인다 — core가 prebuilt인데 deps만 source로 내려가면 `React-Core-prebuilt`가 의존하는 `ReactNativeDependencies` pod이 없어 pod 해석이 깨지므로, 그 조합은 `pod install` 초반에 중단시킨다. 조회는 `ReactNativePodsUtils.probe_artifact`(`scripts/cocoapods/utils.rb`) 하나를 쓰고 재시도·HTTP 상태·curl 종료 코드를 남긴다. 둘 다 소스로 빌드하려면 `RCT_USE_PREBUILT_RNCORE=0`를 준다. 상세는 `.github/scatterlab/README.md`의 "artifact probe는 fail-closed다".
+
 ## CI 러너
 
 맥은 `[self-hosted, zeta-app-builder]`, 리눅스는 `arc-messenger-dev`. **GitHub-hosted 러너로는 릴리스를 만들 수 없다** — org IP allow list가 인증된 `api.github.com` 쓰기를 403으로 막는다(아티팩트 업로드는 Actions 서비스라 통과). `publish-prebuilt.sh`가 그 상황용 fallback.

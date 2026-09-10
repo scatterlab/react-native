@@ -63,9 +63,17 @@ class ReactNativeDependenciesUtils
     @@react_native_path = ""
     @@react_native_version = ""
     @@use_nightly = false
+    @@last_probe = nil
 
     def self.build_react_native_deps_from_source()
         return @@build_from_source
+    end
+
+    def self.prebuilt_unavailable_reason()
+        if ENV["RCT_USE_RN_DEP"] != "1"
+            return "RCT_USE_RN_DEP=#{ENV["RCT_USE_RN_DEP"].inspect} opts out of the prebuilt dependencies. Set RCT_USE_PREBUILT_RNCORE=0 as well to build both from source."
+        end
+        return "the prebuilt artifact is unavailable (#{@@last_probe[:summary]}). Retry once the artifact host is reachable, or set RCT_USE_PREBUILT_RNCORE=0 to build both from source."
     end
 
     def self.resolve_podspec_source()
@@ -126,6 +134,16 @@ class ReactNativeDependenciesUtils
 
             if @@build_from_source && ENV["RCT_USE_LOCAL_RN_DEP"] && !use_local_xcframework
                 rndeps_log("No local xcframework found, reverting to building from source.")
+            end
+            ## Prebuilt core and prebuilt deps are one choice, not two: the
+            ## React-Core-prebuilt podspec depends on the ReactNativeDependencies
+            ## pod, which exists only in prebuilt-deps mode. Falling back to source
+            ## here while the core stays prebuilt yields a pod graph CocoaPods
+            ## cannot resolve, and a retry with --repo-update or --clean-install
+            ## re-runs this same probe, so it can never recover. Stop while the
+            ## reason is still known.
+            if @@build_from_source && ENV["RCT_USE_PREBUILT_RNCORE"] != "0"
+                abort("[ReactNativeDependencies] Refusing to build the dependencies from source while React Native Core is prebuilt: #{prebuilt_unavailable_reason()}")
             end
             if @@build_from_source && ENV["RCT_USE_PREBUILT_RNCORE"] && !artifacts_exists
                 rndeps_log("No prebuilt artifacts found, reverting to building from source.")
@@ -382,10 +400,12 @@ class ReactNativeDependenciesUtils
     end
 
     # This function checks that ReactNativeDependencies artifact exists on the maven repo
+    ## The probe keeps its evidence so setup can fail closed with the reason. A
+    ## single unlogged HEAD leaves a source fallback with nothing to diagnose.
     def self.artifact_exists(tarball_url)
-        # -L is used to follow redirects, useful for the nightlies
-        # I also needed to wrap the url in quotes to avoid escaping & and ?.
-        return (`curl -o /dev/null --silent -Iw '%{http_code}' -L "#{tarball_url}"` == "200")
+        @@last_probe = ReactNativePodsUtils.probe_artifact(tarball_url)
+        rndeps_log("Artifact probe #{@@last_probe[:summary]}")
+        return @@last_probe[:ok]
     end
 
     def self.rndeps_log(message, level = :info)

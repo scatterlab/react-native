@@ -1,0 +1,47 @@
+name: '[scatterlab] Test CocoaPods scripts'
+
+# Upstream runs these tests from test-all.yml, behind an
+# `if: github.repository == 'react/react-native'` gate and a prebuild job that
+# never succeeds here, so this fork has no path that executes them. The
+# prebuilt-artifact probe and the core/deps mode invariant are Podfile-time
+# logic with no other guard, and a break there surfaces as a CocoaPods
+# resolution error in a consumer's deploy.
+on:
+  push:
+    branches:
+      - 'scatterlab/**'
+  pull_request:
+    paths:
+      - 'packages/react-native/scripts/cocoapods/**'
+      - 'packages/react-native/scripts/react_native_pods_utils/**'
+      - 'packages/react-native/scripts/run_ruby_tests.sh'
+      - 'Gemfile'
+      - 'Gemfile.lock'
+      - '.github/workflows/scatterlab-test-cocoapods.yml'
+  workflow_dispatch:
+
+jobs:
+  ruby-tests:
+    name: CocoaPods Ruby tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      # run_ruby_tests.sh runs the files with plain `ruby`, not `bundle exec`:
+      # test-unit is a bundled gem and the Gemfile does not declare it. Install
+      # CocoaPods into the same default gem path instead of using the bundle -
+      # spm-test.rb requires it directly. The macOS runners upstream uses ship
+      # it preinstalled; ubuntu does not.
+      - name: Install CocoaPods
+        run: gem install cocoapods -v 1.16.2 --no-document
+
+      - name: Run Ruby tests
+        run: |
+          cd packages/react-native/scripts
+          ./run_ruby_tests.sh
