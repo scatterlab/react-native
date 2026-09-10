@@ -1,0 +1,104 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+// Points the consumer's build at this fork's Android artifacts.
+//
+// RNGP force-resolves com.facebook.react:react-android:<VERSION_NAME> from Maven Central,
+// and VERSION_NAME has to stay on the upstream base, so the fork's ReactAndroid sources are
+// never compiled by a consumer. This fetches the AAR this fork built and hands its path to
+// RNGP via react.internal.mavenLocalRepo, which also makes RNGP exclude the whole
+// com.facebook.react group from Maven Central. See .github/scatterlab/android-prebuilt.md.
+//
+// Apply from the consumer's settings.gradle(.kts):
+//   apply(from = "<...>/node_modules/react-native/scripts/android/scatterlab-prebuilt-maven.gradle")
+
+import java.security.MessageDigest
+
+def packageJson = new File(buildscript.sourceFile.parentFile, '../../package.json').canonicalFile
+def version = new groovy.json.JsonSlurper().parse(packageJson).version
+
+// Upstream react-native: nothing of ours to fetch. Stay out of the way entirely.
+if (!(version ==~ /^\d+\.\d+\.\d+-scatterlab\.\d+$/)) {
+  return
+}
+
+def tag = "prebuilt-android-${version}"
+def asset = "react-native-android-maven-${version}.tar.gz"
+def assetUrl = "https://github.com/scatterlab/react-native/releases/download/${tag}/${asset}"
+
+// Scoped by fork version on purpose. VERSION_NAME is pinned to the base, so every fork
+// version publishes the SAME coordinate - sharing one repo root would let Gradle keep
+// serving the previous version's AAR with no error at all.
+def repoDir = new File(gradle.gradleUserHomeDir, "scatterlab-react-native/${version}/maven")
+
+def fail = { String why ->
+  throw new GradleException(
+      "[scatterlab] ${why}\n" +
+      "  This version of @scatterlab/react-native carries Android native changes that only\n" +
+      "  exist in this fork's prebuilt artifacts. Run the '[scatterlab] Build Android prebuilt'\n" +
+      "  workflow for ${version}, then build again.\n" +
+      "  Expected: ${assetUrl}")
+}
+
+def download = { String url, File target ->
+  def connection = new URL(url).openConnection()
+  connection.instanceFollowRedirects = true
+  connection.connectTimeout = 30_000
+  connection.readTimeout = 300_000
+  if (connection.responseCode != 200) {
+    fail("${url} returned HTTP ${connection.responseCode}.")
+  }
+  target.withOutputStream { out -> connection.inputStream.withStream { input -> out << input } }
+}
+
+def sha256 = { File file ->
+  def digest = MessageDigest.getInstance('SHA-256')
+  file.eachByte(1024 * 1024) { buffer, length -> digest.update(buffer, 0, length) }
+  digest.digest().encodeHex().toString()
+}
+
+if (!repoDir.isDirectory()) {
+  // Staged next to the final location, not in /tmp: the move below has to be a rename on
+  // the same filesystem, or a half-copied tree can be left behind as a cache hit.
+  repoDir.parentFile.mkdirs()
+  def staging = java.nio.file.Files
+      .createTempDirectory(repoDir.parentFile.toPath(), 'staging')
+      .toFile()
+  try {
+    def tarball = new File(staging, asset)
+    download(assetUrl, tarball)
+
+    def expectedFile = new File(staging, "${asset}.sha256")
+    download("${assetUrl}.sha256", expectedFile)
+    def expected = expectedFile.text.trim().split(/\s+/)[0]
+    def actual = sha256(tarball)
+    if (expected != actual) {
+      fail("${asset} sha256 mismatch: expected ${expected}, got ${actual}.")
+    }
+
+    def extracted = new File(staging, 'maven')
+    extracted.mkdirs()
+    def proc = ['tar', '-xzf', tarball.absolutePath, '-C', extracted.absolutePath].execute()
+    def stderr = new StringBuffer()
+    proc.waitForProcessOutput(new StringBuffer(), stderr)
+    if (proc.exitValue() != 0) {
+      fail("extracting ${asset} failed: ${stderr}")
+    }
+
+    // Move only once the tree is complete: a half-extracted directory must never be left
+    // behind as a cache hit for the next build.
+    if (!extracted.renameTo(repoDir) && !repoDir.isDirectory()) {
+      fail("could not move the extracted repository into ${repoDir}.")
+    }
+  } finally {
+    staging.deleteDir()
+  }
+}
+
+gradle.beforeProject { project ->
+  project.extensions.extraProperties.set('react.internal.mavenLocalRepo', repoDir.absolutePath)
+}
