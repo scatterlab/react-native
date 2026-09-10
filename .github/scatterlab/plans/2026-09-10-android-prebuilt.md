@@ -988,12 +988,14 @@ PR은 `~/GitHub/zeta-frontend/.github/pull_request_template.md` 를 먼저 Read 
 
 코드가 아니라 절차다. Task 4의 PR이 머지된 뒤에 한다.
 
+브랜치 base가 `0.87.1-scatterlab.3`이므로 이 변경이 나갈 다음 fork 버전은 **`0.87.1-scatterlab.4`**다. 아래 명령의 버전은 전부 그 값이다.
+
 - [ ] **Step 1: dry-run 으로 빌드가 도는지 본다**
 
 ```bash
 gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native \
   --ref scatterlab/0.87.1 \
-  -f version=0.87.1-scatterlab.3 -f verify_symbol=visibleTextEnd -f dry_run=true
+  -f version=0.87.1-scatterlab.4 -f verify_symbol=visibleTextEnd -f dry_run=true
 gh run watch --repo scatterlab/react-native
 ```
 
@@ -1001,16 +1003,16 @@ gh run watch --repo scatterlab/react-native
 
 - [ ] **Step 2: 버전을 올린다**
 
-`packages/react-native/package.json` 의 `version` 만 `0.87.1-scatterlab.3` 으로 바꾼다. `ReactAndroid/gradle.properties` 의 `VERSION_NAME`, sibling 핀, `ReactNativeVersion.*` 은 건드리지 않는다. 커밋 후 `scatterlab/0.87.1` 에 머지한다.
+`packages/react-native/package.json` 의 `version` 만 `0.87.1-scatterlab.4` 으로 바꾼다. `ReactAndroid/gradle.properties` 의 `VERSION_NAME`, sibling 핀, `ReactNativeVersion.*` 은 건드리지 않는다. 커밋 후 `scatterlab/0.87.1` 에 머지한다.
 
 - [ ] **Step 3: prebuilt 릴리스 두 개를 만든다 (npm 보다 먼저)**
 
 ```bash
 gh workflow run scatterlab-prebuild-ios.yml --repo scatterlab/react-native \
-  --ref scatterlab/0.87.1 -f version=0.87.1-scatterlab.3
+  --ref scatterlab/0.87.1 -f version=0.87.1-scatterlab.4
 gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native \
   --ref scatterlab/0.87.1 \
-  -f version=0.87.1-scatterlab.3 -f verify_symbol=visibleTextEnd -f dry_run=false
+  -f version=0.87.1-scatterlab.4 -f verify_symbol=visibleTextEnd -f dry_run=false
 ```
 
 두 `verify` 잡이 모두 통과할 때까지 기다린다. 한쪽만 끝난 부분 릴리스로 다음 단계에 가지 않는다.
@@ -1019,7 +1021,7 @@ gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native \
 
 ```bash
 gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
-  -f version=0.87.1-scatterlab.3 -f dist_tag=latest -f dry_run=false
+  -f version=0.87.1-scatterlab.4 -f dist_tag=latest -f dry_run=false
 ```
 
 publish 직후 **약 1분간 install 이 `ETARGET` 으로 실패한다** (packument 와 dist-tags 캐시가 별개). install 이 되는 것을 확인한 뒤 다음으로 간다.
@@ -1033,7 +1035,7 @@ cd ~/GitHub/zeta-frontend/.claude/worktrees/daewoon+rn-android-prebuilt
 grep -rn '0.87.1-scatterlab.2' packages/*/package.json
 ```
 
-`packages/{app,core,service,ui}/package.json` 의 alias 를 모두 `0.87.1-scatterlab.3` 으로 바꾼다. `packages/core` 는 **peerDependencies 에 alias 없는 정확 버전**으로도 들고 있어 alias 패턴 grep 에서 빠진다 — 함께 고친다. 그다음:
+`packages/{app,core,service,ui}/package.json` 의 alias 를 모두 `0.87.1-scatterlab.4` 으로 바꾼다. `packages/core` 는 **peerDependencies 에 alias 없는 정확 버전**으로도 들고 있어 alias 패턴 grep 에서 빠진다 — 함께 고친다. 그다음:
 
 ```bash
 yarn install
