@@ -1,0 +1,47 @@
+name: '[scatterlab] Test prebuilt probe'
+
+# The prebuilt-artifact probe and the core/deps mode invariant are Podfile-time
+# logic with no other guard, and a break there surfaces only as a CocoaPods
+# resolution error in a consumer's deploy. Upstream runs its Ruby tests from
+# test-all.yml behind an `if: github.repository == 'react/react-native'` gate
+# and a prebuild job that never succeeds here, so nothing in this fork ran them.
+on:
+  push:
+    branches:
+      - 'scatterlab/**'
+  pull_request:
+    paths:
+      - 'packages/react-native/scripts/cocoapods/**'
+      - '.github/workflows/scatterlab-test-prebuilt-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  ruby-tests:
+    name: Prebuilt probe Ruby tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      # Not run_ruby_tests.sh: it loads every *-test.rb into one process, and at
+      # this tag that set does not pass anywhere. spm-test.rb requires the real
+      # cocoapods gem, whose Pod::UI and Pod::Executable collide with the
+      # suite's PodMock in either load order ("wrong argument type Class
+      # (expected Module)"), and it fails on its own too - its InstallerStub has
+      # no `aggregate_targets`, which spm.rb calls. Several other files depend on
+      # constants a neighbour happens to define first. Those are upstream's, over
+      # files this fork does not touch; these two cover the ones it does.
+      - name: Run prebuilt probe tests
+        run: |
+          cd packages/react-native/scripts
+          {
+            echo 'require "test/unit"'
+            echo 'require_relative "cocoapods/__tests__/rndependencies-test.rb"'
+            echo 'require_relative "cocoapods/__tests__/prebuilt_probe-test.rb"'
+          } > scatterlab_tests.rb
+          ruby -Itest scatterlab_tests.rb

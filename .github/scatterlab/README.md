@@ -71,7 +71,9 @@ deps는 prebuilt를 못 구하면 **중단한다**. `React-Core-prebuilt`의 pod
 
 **core와 deps는 호스트가 다르다** — core는 이 fork의 GitHub 릴리스, deps는 Maven Central이다. 한쪽만 흔들려도 모드가 갈라지는 이 구조가 fork 고유의 위험이라 조용한 폴백을 여기서 막는다. core 쪽은 `FORK_REQUIRES_OWN_PREBUILT`가 이미 abort시키지만, 404(릴리스 미게시)와 전송 실패를 구분해 각각 다른 조치를 안내한다.
 
-회귀 테스트는 `scripts/cocoapods/__tests__/prebuilt_probe-test.rb`이며 실제 로컬 HTTP 서버를 띄워 curl을 그대로 돌린다(리다이렉트·재시도·404·전송 실패·curlrc 오염·모드 혼합 거부). `[scatterlab] Test CocoaPods scripts` 워크플로가 `scatterlab/**` push와 PR에서 Ruby 스위트 전체를 실행한다 — 상류 `test-all`의 Ruby 잡은 `github.repository` 게이트와 선행 prebuild 잡에 막혀 이 fork에서 돌지 않는다.
+회귀 테스트는 `scripts/cocoapods/__tests__/prebuilt_probe-test.rb`이며 실제 로컬 HTTP 서버를 띄워 curl을 그대로 돌린다(리다이렉트·재시도·404·전송 실패·curlrc 오염·모드 혼합 거부). `[scatterlab] Test prebuilt probe` 워크플로가 `scatterlab/**` push와 `scripts/cocoapods/**` PR에서 이 파일과 `rndependencies-test.rb`를 실행한다 — 상류 `test-all`의 Ruby 잡은 `github.repository` 게이트와 선행 prebuild 잡에 막혀 이 fork에서 돌지 않는다.
+
+`run_ruby_tests.sh`를 그대로 쓰지 않는 이유: 이 태그에서 그 전량 집합은 어디서도 통과하지 않는다. `spm-test.rb`가 실제 cocoapods gem을 require하는데 그 gem의 `Pod::UI`·`Pod::Executable`이 `PodMock`과 **어느 로드 순서로도** 충돌하고(`wrong argument type Class (expected Module)`), 단독 실행도 실패한다(`InstallerStub`에 `spm.rb`가 부르는 `aggregate_targets`가 없다). 나머지 몇 파일은 이웃 파일이 먼저 정의하는 상수에 의존한다. 전부 이 fork가 건드리지 않는 상류 파일이라 상류에 남긴다.
 
 ### 절대 건드리지 않는 것
 
