@@ -17,6 +17,55 @@ class ReactNativePodsUtils
         URI::File.build(path: URI::DEFAULT_PARSER.escape(path)).to_s
     end
 
+    # Checks whether a prebuilt artifact is published, and reports WHY when it is
+    # not. A bare boolean collapses "never published" into "could not reach the
+    # host", and a caller that reads that as absence silently degrades a whole
+    # install over one blip. Returns :ok, :http_code, :curl_exit and a :summary
+    # safe to log — proxies and enterprise mirrors carry credentials in the URL
+    # path, the query and curl's stderr, so none of the three appear in it.
+    # `--disable` skips the runner's ~/.curlrc. A config cannot override a flag
+    # passed here - curl reads the config first and the command line second -
+    # but it can add settings we pass none of, and a stray `proxy` or `resolve`
+    # decides whether the probe reaches the host at all.
+    # The argv form of IO.popen runs curl without a shell, so a URL carrying `&`
+    # or `?` needs no quoting; curl's own diagnostics are dropped rather than
+    # inherited, since they quote the URL back in full.
+    def self.probe_artifact(tarball_url)
+        argv = [
+            'curl', '--disable', '--head', '--location', '--fail',
+            '--retry', '2', '--retry-delay', '1', '--retry-all-errors',
+            '--connect-timeout', '10', '--max-time', '30',
+            '--silent', '--output', '/dev/null',
+            '--write-out', '%{http_code}', tarball_url
+        ]
+        begin
+            http_code = IO.popen(argv, :err => File::NULL, &:read)
+            curl_exit = $?.exitstatus
+        rescue Errno::ENOENT
+            # No curl on PATH. Upstream's backtick form reported this as a plain
+            # failed probe; raising out of a Podfile instead would be a worse
+            # trade now that the probe decides whether to abort.
+            http_code = ""
+            curl_exit = "not found"
+        end
+        http_code = http_code.strip
+        # URI() raises on a URL it cannot parse and quotes the whole URL in the
+        # message - the one string this method exists to keep out of the logs.
+        # ENTERPRISE_REPOSITORY is user-supplied, so that input is reachable.
+        host = (URI(tarball_url).host rescue nil) || "unknown host"
+        {
+            # Both halves: curl can report a status from an earlier hop and still
+            # fail overall (headers received, then the connection stalls past
+            # --max-time). Untested - reproducing it deterministically needs
+            # --retry 0, which would mean widening this method's signature for
+            # the test alone.
+            :ok => curl_exit == 0 && http_code == "200",
+            :http_code => http_code,
+            :curl_exit => curl_exit,
+            :summary => "#{host}: HTTP #{http_code}, curl exit #{curl_exit}",
+        }
+    end
+
     def self.warn_if_not_on_arm64
         if SysctlChecker.new().call_sysctl_arm64() == 1 && !Environment.new().ruby_platform().include?('arm64')
             Pod::UI.warn 'Do not use "pod install" from inside Rosetta2 (x86_64 emulation on arm64).'

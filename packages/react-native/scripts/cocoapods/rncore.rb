@@ -36,6 +36,7 @@ class ReactNativeCoreUtils
     @@use_nightly = false
     @@download_dsyms = false
     @@fork_prebuilt_published = nil
+    @@last_probe = nil
 
     ## This fork builds its own React.xcframework and attaches it to a
     ## `prebuilt-ios-<version>` release. See .github/scatterlab/README.md.
@@ -84,6 +85,11 @@ class ReactNativeCoreUtils
             end
             rncore_log("Building from source: #{@@build_from_source}")
         end
+        ## Outside the guard above: this call latches after the first
+        ## use_react_native!, but deps re-runs its whole body whenever
+        ## RCT_DEPS_VERSION is an empty string, so a second call can still flip
+        ## the pair apart. Re-assert on every call.
+        ReactNativeDependenciesUtils.assert_prebuilt_pair(@@build_from_source)
     end
 
     def self.abort_if_use_local_rncore_with_no_file()
@@ -366,6 +372,21 @@ class ReactNativeCoreUtils
         return "#{FORK_PREBUILT_RELEASE_URL}/prebuilt-ios-#{version}/react-native-artifacts-#{version}-reactnative-core-#{dsyms ? "dSYM-" : ""}#{build_type.to_s}.tar.gz"
     end
 
+    ## Three outcomes, three instructions: nobody cut the release, the host
+    ## refused, or we never got an answer. The old message only gave the first.
+    ## `%{http_code}` is 000 when curl never completed a response.
+    def self.fork_prebuilt_failure_reason()
+        code = @@last_probe[:http_code]
+        fallback = "or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source."
+        if code == "404"
+            return "no prebuilt release exists (#{@@last_probe[:summary]}). Run the '[scatterlab] Build iOS prebuilt core' workflow for this version, #{fallback}"
+        end
+        if code.to_i > 0
+            return "the release host answered HTTP #{code} (#{@@last_probe[:summary]}). Retry once it recovers, #{fallback}"
+        end
+        return "the release host did not answer (#{@@last_probe[:summary]}). Retry once it is reachable, #{fallback}"
+    end
+
     ## One HEAD probe per pod install, against the debug framework only, so that all
     ## variants resolve to the same host: a release either carries the whole set or the
     ## whole set comes from upstream.
@@ -375,7 +396,7 @@ class ReactNativeCoreUtils
         if @@fork_prebuilt_published
             rncore_log("Using this fork's prebuilt artifacts (prebuilt-ios-#{version}).")
         elsif FORK_REQUIRES_OWN_PREBUILT
-            abort("[ReactNativeCore] This version carries iOS native changes that only exist in this fork's prebuilt framework, but no prebuilt release was found for #{version}. Run the '[scatterlab] Build iOS prebuilt core' workflow for this version, or set RCT_USE_PREBUILT_RNCORE=0 to build React core from source.")
+            abort("[ReactNativeCore] This version carries iOS native changes that only exist in this fork's prebuilt framework, and its artifact did not resolve for #{version}: #{fork_prebuilt_failure_reason()}")
         else
             rncore_log("No prebuilt release for #{version}. Using the upstream artifacts for the base version.")
         end
@@ -500,7 +521,12 @@ class ReactNativeCoreUtils
     end
 
     def self.release_artifact_exists(version)
-        return artifact_exists(stable_tarball_url(version, :debug))
+        url = stable_tarball_url(version, :debug)
+        ## stable_tarball_url asks fork_prebuilt_published?, which already probed
+        ## this exact URL. Probing it again doubles the worst case for no answer
+        ## we do not have.
+        return true if url == fork_stable_tarball_url(version, :debug)
+        return artifact_exists(url)
     end
 
     def self.nightly_artifact_exists(version)
@@ -512,10 +538,12 @@ class ReactNativeCoreUtils
     end
 
     # This function checks that ReactNativeCore artifact exists on the maven repo
+    ## The probe keeps its evidence so fork_prebuilt_published? can name the actual
+    ## failure. A bare false there reads as "nobody built this release yet".
     def self.artifact_exists(tarball_url)
-        # -L is used to follow redirects, useful for the nightlies
-        # I also needed to wrap the url in quotes to avoid escaping & and ?.
-        return (`curl -o /dev/null --silent -Iw '%{http_code}' -L "#{tarball_url}"` == "200")
+        @@last_probe = ReactNativePodsUtils.probe_artifact(tarball_url)
+        rncore_log("Artifact probe #{@@last_probe[:summary]}")
+        return @@last_probe[:ok]
     end
 
     def self.rncore_log(message, level = :info)
