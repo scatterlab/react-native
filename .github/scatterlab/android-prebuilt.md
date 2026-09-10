@@ -97,7 +97,7 @@ apply(from = "../../../node_modules/react-native/scripts/android/scatterlab-preb
 
 **워크플로 `verify` 잡** — 릴리스가 소비 가능한지 확인하고, 통과해야만 릴리스를 공개한다:
 
-- 에셋 이름이 정확히 기대한 2개인지 (`gh api ... --jq '.assets[].name'` diff). GitHub은 예상 밖 문자가 든 에셋 이름을 재작성한다.
+- 에셋 이름이 정확히 기대한 2개인지 (`gh release view --json assets --jq '.assets[].name'` diff). GitHub은 예상 밖 문자가 든 에셋 이름을 재작성한다. REST의 "get a release by tag"(`gh api repos/.../releases/tags/<tag>`)는 draft를 못 찾으므로 쓰지 않는다 — `gh release view`가 쓰는 GraphQL 경로만 draft를 태그로 찾는다.
 - tarball을 받아 sha256이 맞는지. 릴리스가 이 시점엔 아직 draft라 공개 다운로드 URL이 404다 — `gh release download`로 `GH_TOKEN` 인증된 API를 거쳐 받는다.
 - 트리에 `com/facebook/react/react-android/<base>/`의 `react-android-<base>-debug.aar`, `-release.aar`, `.module`, `.pom`이 모두 있는지.
 - 위 검사가 전부 통과한 뒤에야 `gh release edit --draft=false`로 릴리스를 공개한다. 실패하면 draft로 남아 소비자에게 노출되지 않는다.

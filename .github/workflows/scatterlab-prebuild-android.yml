@@ -234,12 +234,15 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
           ASSET: ${{ needs.prepare.outputs.asset }}
           BASE: ${{ needs.prepare.outputs.base }}
-          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # The REST "get a release by tag" endpoint (`gh api repos/.../releases/tags/<tag>`)
+          # only resolves published releases - it 404s on a draft. `gh release view` falls
+          # back to a GraphQL lookup that finds drafts by tag too, so use that instead.
+          #
           # GitHub rewrites asset names containing unexpected characters, so compare exactly
           # rather than trusting the upload.
-          gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name' | sort > /tmp/actual
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sort > /tmp/actual
           printf '%s\n%s\n' "$ASSET" "$ASSET.sha256" | sort > /tmp/expected
           diff /tmp/expected /tmp/actual
 
