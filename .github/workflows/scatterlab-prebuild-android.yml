@@ -248,6 +248,9 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gh release/api resolve the repository from the local git remote by default;
+          # set this explicitly rather than assume that inference, matching the verify job.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ inputs.version }}
           DIR: ${{ steps.pack.outputs.dir }}
@@ -269,6 +272,18 @@ jobs:
             # failed. Delete and recreate rather than reusing it in place, so no asset from
             # that partial earlier run (e.g. only the debug AAR made it up) can survive.
             gh release delete "$TAG" --yes
+          fi
+          # A draft release never creates a git tag - GitHub only cuts the tag when a
+          # release is published - so most retries reach here with nothing to clean up.
+          # But a tag CAN exist even with no draft (or no release at all) visible above: a
+          # previously published release for this version that was later deleted (deleting
+          # a release does not delete its tag), or a hand-created tag. `gh release create
+          # --target` only takes effect when it has to create the tag - it never moves one
+          # that already exists - so leaving a stale tag here would attach this run's fresh
+          # assets to a release still pointing at old code. Delete the tag only when it
+          # exists; a missing ref is the ordinary case, not a failure.
+          if gh api "repos/$GH_REPO/git/refs/tags/$TAG" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$TAG"
           fi
           # Draft: invisible to anyone without push access, and its asset URLs 404 for
           # everyone else. A consumer that races this window gets a 404 and aborts - the
