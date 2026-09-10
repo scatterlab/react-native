@@ -84,6 +84,7 @@ class ReactNativeCoreUtils
                 rncore_log("No prebuilt artifacts found, reverting to building from source.")
             end
             rncore_log("Building from source: #{@@build_from_source}")
+            ReactNativeDependenciesUtils.assert_prebuilt_pair(@@build_from_source)
         end
     end
 

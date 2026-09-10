@@ -67,14 +67,16 @@ react-native-artifacts-0.86.2-reactnative-core-debug.tar.gz               → 20
 
 `ReactNativePodsUtils.probe_artifact`(`scripts/cocoapods/utils.rb`)가 core·deps 양쪽의 HEAD 조회를 담당한다. 두 파일이 이미 공통으로 require하는 유일한 파일이라 여기 둔다. `--disable`로 러너 `~/.curlrc`를 무시하고, 최대 3회(연결 10초, 요청당 30초, 1초 간격) 시도한 뒤 HTTP 상태와 curl 종료 코드를 함께 돌려준다. 404도 재시도 대상이다 — artifact 게시 직후의 전파 지연을 흡수하기 위해서다. 응답이 멈춘 호스트에서는 probe 한 번이 최대 ~92초까지 걸리고 core 경로는 install당 두 번 조회하므로, 느린 `pod install`을 hang으로 오판하지 않는다. 로그·에러 메시지에는 **호스트만** 남는다 — URL 경로·쿼리와 curl stderr에는 프록시나 엔터프라이즈 미러의 자격증명이 실린다.
 
-deps는 prebuilt를 못 구하면 **중단한다**. 한쪽만 내려간 조합은 어느 쪽으로 굴러도 나쁘다.
+한쪽만 내려간 조합은 **중단한다**. 어느 쪽으로 굴러도 나쁘기 때문이다.
 
 - **warm `Pods/`**: CocoaPods가 `Pods/Local Podspecs`에 저장된 이전(prebuilt-deps) install의 `React-Core-prebuilt` 스펙을 재사용한다 — `:podspec` external source는 저장본이 있는 한 재평가되지 않는다(`installer/analyzer.rb`의 refetch 조건: 저장본 없음 / `:path` 소스 / pod 디렉터리 없음 / checkout 옵션 변경). 그 스펙은 이번 install이 더는 선언하지 않는 `ReactNativeDependencies` pod을 요구하므로 해석이 깨진다: `Unable to find a specification for 'ReactNativeDependencies' depended upon by 'React-Core-prebuilt'`. 2026-09-09 배포 실패가 이 경우다(실패 로그에 `React-Core-prebuilt`의 `Fetching podspec for` 줄이 없고 source 모드 third-party pod만 fetch됐다).
 - **clean `Pods/`**: 반대로 **해석이 성공해버린다**. `s.dependency "ReactNativeDependencies"`는 `rndependencies.rb:49` 한 곳뿐이고 source 분기에서는 glog/boost/…를 대신 선언하기 때문이다. 그러면 prebuilt 바이너리로 컴파일된 core가 source로 빌드된 third-party 심볼과 링크된다 — 에러가 없어서 더 나쁘다.
 
 `--repo-update`·`--clean-install`은 둘 다 복구하지 못한다: 전자는 spec repo만, 후자는 Xcode 프로젝트 캐시만 갱신하고(`installer.rb`의 `clean_install`은 `ProjectCacheAnalyzer`로만 흐른다) 저장된 podspec도 probe 결과도 건드리지 않는다. 저장본을 실제로 무효화하는 건 `pod update <name>`이나 `rm -rf Pods`뿐이다.
 
-같은 이유로 `RCT_USE_RN_DEP=0` + prebuilt core 조합도 거부한다. `RCT_USE_PREBUILT_RNCORE=0`이면 둘 다 source로 가는 정합한 조합이라 상류의 폴백을 그대로 둔다.
+검사는 `ReactNativeDependenciesUtils.assert_prebuilt_pair`이고 **`setup_rncore` 끝에서** 불린다. `use_react_native!`가 deps를 먼저(`react_native_pods.rb:145`) core를 나중에(`:148`) 돌리므로 그 시점이 두 모드가 다 확정되는 첫 지점이다. 판정은 **core가 실제로 계산한 결과**로 한다 — `RCT_USE_PREBUILT_RNCORE`를 읽으면 두 방향으로 틀린다: `RCT_TESTONLY_RNCORE_TARBALL_PATH`가 있으면 플래그가 `0`이어도 core는 prebuilt이고(`rncore.rb:76-78`), `FORK_REQUIRES_OWN_PREBUILT = false`인 버전에서 artifact를 못 구하면 플래그가 `1`이어도 core는 source로 내려간다(그건 정합한 쌍이라 막으면 안 된다).
+
+`RCT_USE_RN_DEP=0` + prebuilt core 조합도 같은 문으로 걸린다. `RCT_USE_PREBUILT_RNCORE=0`이고 로컬 tarball도 없으면 둘 다 source로 가는 정합한 조합이라 상류의 폴백을 그대로 둔다.
 
 **core와 deps는 호스트가 다르다** — core는 이 fork의 GitHub 릴리스, deps는 Maven Central이다. 한쪽만 흔들려도 모드가 갈라지는 이 구조가 fork 고유의 위험이라 조용한 폴백을 여기서 막는다. core 쪽은 `FORK_REQUIRES_OWN_PREBUILT`가 이미 abort시키지만, 404(릴리스 미게시)와 전송 실패를 구분해 각각 다른 조치를 안내한다.
 

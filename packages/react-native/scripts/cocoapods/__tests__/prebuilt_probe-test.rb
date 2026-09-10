@@ -22,7 +22,7 @@ end
 
 class PrebuiltProbeTests < Test::Unit::TestCase
 
-    ENV_KEYS = %w[RCT_USE_RN_DEP RCT_USE_PREBUILT_RNCORE RCT_USE_LOCAL_RN_DEP ENTERPRISE_REPOSITORY CURL_HOME]
+    ENV_KEYS = %w[RCT_USE_RN_DEP RCT_USE_PREBUILT_RNCORE RCT_USE_LOCAL_RN_DEP RCT_TESTONLY_RNCORE_TARBALL_PATH ENTERPRISE_REPOSITORY CURL_HOME]
 
     def setup
         @saved_env = ENV_KEYS.to_h { |key| [key, ENV[key]] }
@@ -35,6 +35,8 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         ReactNativeDependenciesUtils.class_variable_set(:@@react_native_version, "")
         ReactNativeDependenciesUtils.class_variable_set(:@@build_from_source, true)
         ReactNativeCoreUtils.class_variable_set(:@@fork_prebuilt_published, nil)
+        ReactNativeCoreUtils.class_variable_set(:@@react_native_version, "")
+        ReactNativeCoreUtils.class_variable_set(:@@build_from_source, true)
         if @original_fork_url
             ReactNativeCoreUtils.singleton_class.send(:define_method, :fork_stable_tarball_url, @original_fork_url)
             @original_fork_url = nil
@@ -43,7 +45,8 @@ class PrebuiltProbeTests < Test::Unit::TestCase
 
     # A real HTTP server, so the assertions cover what curl actually does with
     # our flags (redirects, retries, --write-out) rather than a stubbed exit code.
-    # `responses` is called with the 1-based request number and returns
+    # `responses` is called with the 1-based request number and the request line
+    # (so a test can answer the core and deps artifacts differently) and returns
     # [status line, extra headers].
     def start_server(&responses)
         socket = TCPServer.new("127.0.0.1", 0)
@@ -54,7 +57,7 @@ class PrebuiltProbeTests < Test::Unit::TestCase
                 request_line = client.gets
                 while (line = client.gets) && line != "\r\n"; end
                 state[:requests] << request_line
-                status, headers = responses.call(state[:requests].length)
+                status, headers = responses.call(state[:requests].length, request_line)
                 client.write("HTTP/1.1 #{status}\r\nContent-Length: 0\r\nConnection: close\r\n#{headers}\r\n")
                 client.close
             end
@@ -184,67 +187,100 @@ class PrebuiltProbeTests < Test::Unit::TestCase
     # TEST - setup_react_native_dependencies        #
     # ============================================= #
 
+    VERSION = "0.87.1-scatterlab.2"
+
     def setup_deps_against(server)
         ENV["ENTERPRISE_REPOSITORY"] = "http://127.0.0.1:#{server[:port]}"
-        ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", "0.87.1-scatterlab.2")
+        ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", VERSION)
     end
 
-    def test_setupDeps_whenCoreIsPrebuiltAndTheArtifactIsUnavailable_abortsBeforePodResolution
+    # use_react_native! runs deps first and core second (react_native_pods.rb:145,
+    # :148), and the pair is only decidable once both have run.
+    def setup_pair_against(server)
+        setup_deps_against(server)
+        ReactNativeCoreUtils.setup_rncore("/rn", VERSION)
+    end
+
+    # Answer the deps artifact and the core artifact differently.
+    def server_answering(deps:, core:)
+        start_server do |_n, request|
+            [request.include?("-dependencies-") ? deps : core, ""]
+        end
+    end
+
+    def test_setupPair_whenCoreIsPrebuiltAndTheDepsArtifactIsUnavailable_abortsBeforePodResolution
         ENV["RCT_USE_RN_DEP"] = "1"
         ENV["RCT_USE_PREBUILT_RNCORE"] = "1"
-        server = start_server { ["404 Not Found", ""] }
+        server = server_answering(:deps => "404 Not Found", :core => "200 OK")
+        stub_fork_release_url(url_for(server, "/react-native-artifacts-core-debug.tar.gz"))
 
-        error = assert_raise(SystemExit) { setup_deps_against(server) }
+        error = assert_raise(SystemExit) { setup_pair_against(server) }
 
         assert_true(error.message.include?("404"))
     end
 
-    def test_setupDeps_whenCoreIsPrebuiltAndDepsAreOptedOut_aborts
+    def test_setupPair_whenCoreIsPrebuiltAndDepsAreOptedOut_aborts
         ENV["RCT_USE_RN_DEP"] = "0"
         ENV["RCT_USE_PREBUILT_RNCORE"] = "1"
+        server = server_answering(:deps => "404 Not Found", :core => "200 OK")
+        stub_fork_release_url(url_for(server, "/react-native-artifacts-core-debug.tar.gz"))
+
+        assert_raise(SystemExit) { setup_pair_against(server) }
+    end
+
+    # A local core tarball makes the core prebuilt even with
+    # RCT_USE_PREBUILT_RNCORE=0 (rncore.rb:76-78), so the env var alone cannot
+    # decide the pair.
+    def test_setupPair_whenCoreIsPrebuiltFromALocalTarball_aborts
+        tarball = File.join(ENV["TMPDIR"] || "/tmp", "rn-local-core-#{Process.pid}.tar.gz")
+        File.write(tarball, "")
+        ENV["RCT_TESTONLY_RNCORE_TARBALL_PATH"] = tarball
+        ENV["RCT_USE_RN_DEP"] = "0"
+        ENV["RCT_USE_PREBUILT_RNCORE"] = "0"
 
         assert_raise(SystemExit) do
-            ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", "0.87.1-scatterlab.2")
+            ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", VERSION)
+            ReactNativeCoreUtils.setup_rncore("/rn", VERSION)
         end
+    ensure
+        File.unlink(tarball) if File.exist?(tarball)
     end
 
-    # The normal consumer path. A false abort here fails every pod install, so it
-    # is worth a test even though the assertion is a negative.
-    def test_setupDeps_whenTheArtifactIsAvailable_doesNotAbort
+    # With FORK_REQUIRES_OWN_PREBUILT off, an unreachable artifact host drops the
+    # core to source too. That pair is consistent and used to build fine, so the
+    # invariant must read the core's actual result and not the env var.
+    def test_setupPair_whenBothFallBackToSource_doesNotAbort
         ENV["RCT_USE_RN_DEP"] = "1"
         ENV["RCT_USE_PREBUILT_RNCORE"] = "1"
-        server = start_server { ["200 OK", ""] }
+        without_fork_prebuilt_requirement do
+            server = server_answering(:deps => "404 Not Found", :core => "404 Not Found")
+            stub_fork_release_url(url_for(server, "/react-native-artifacts-core-debug.tar.gz"))
 
-        begin
-            setup_deps_against(server)
-        rescue SystemExit => error
-            flunk("setup aborted on an available artifact: #{error.message}")
-        rescue StandardError
-            # Whatever the tarball download does next needs a CocoaPods sandbox
-            # and is out of scope; the invariant check already let this through.
+            begin
+                setup_pair_against(server)
+            rescue SystemExit => error
+                flunk("aborted on a consistent source/source pair: #{error.message}")
+            end
+
+            assert_true(ReactNativeDependenciesUtils.build_react_native_deps_from_source())
+            assert_true(ReactNativeCoreUtils.build_rncore_from_source())
         end
-
-        assert_false(ReactNativeDependenciesUtils.build_react_native_deps_from_source())
     end
 
-    # A local xcframework satisfies the prebuilt side without any artifact, so
-    # the pair stays consistent and the invariant must not fire.
-    def test_setupDeps_whenALocalXcframeworkIsSupplied_doesNotAbort
-        local = File.join(ENV["TMPDIR"] || "/tmp", "rn-local-deps-#{Process.pid}.tar.gz")
-        File.write(local, "")
-        ENV["RCT_USE_LOCAL_RN_DEP"] = local
-        ENV["RCT_USE_RN_DEP"] = "0"
-        ENV["RCT_USE_PREBUILT_RNCORE"] = "1"
-
-        begin
-            ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", "0.87.1-scatterlab.2")
-        rescue SystemExit => error
-            flunk("setup aborted on a local xcframework: #{error.message}")
-        end
-
-        assert_false(ReactNativeDependenciesUtils.build_react_native_deps_from_source())
+    def without_fork_prebuilt_requirement
+        previous = ReactNativeCoreUtils.const_get(:FORK_REQUIRES_OWN_PREBUILT)
+        silence_warnings { ReactNativeCoreUtils.const_set(:FORK_REQUIRES_OWN_PREBUILT, false) }
+        yield
     ensure
-        File.unlink(local) if File.exist?(local)
+        silence_warnings { ReactNativeCoreUtils.const_set(:FORK_REQUIRES_OWN_PREBUILT, previous) }
+    end
+
+    def silence_warnings
+        previous = $VERBOSE
+        $VERBOSE = nil
+        yield
+    ensure
+        $VERBOSE = previous
     end
 
     # Source core + source deps is a consistent pair, so upstream's fallback stays.

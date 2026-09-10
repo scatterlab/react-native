@@ -69,6 +69,28 @@ class ReactNativeDependenciesUtils
         return @@build_from_source
     end
 
+    ## Prebuilt core and prebuilt deps are one choice, not two, and a
+    ## half-fallback is bad whichever way it lands. With a warm Pods/, CocoaPods
+    ## reuses the React-Core-prebuilt spec stored in Pods/Local Podspecs from the
+    ## previous, prebuilt-deps install - a :podspec external source is not
+    ## re-evaluated while a stored copy exists - so it still demands the
+    ## ReactNativeDependencies pod this install no longer declares, and
+    ## resolution fails. From a clean Pods/ it resolves instead, and links a core
+    ## compiled against the prebuilt binaries with third-party symbols built from
+    ## source; that one ships without an error at all. Neither --repo-update nor
+    ## --clean-install recovers: the first refreshes spec repos, the second only
+    ## the Xcode project cache.
+    ##
+    ## Takes the core's computed result rather than reading RCT_USE_PREBUILT_RNCORE:
+    ## a local tarball makes the core prebuilt with the flag off (rncore.rb:76-78),
+    ## and a missing artifact drops it to source with the flag on. Called from
+    ## setup_rncore, which runs after this module (react_native_pods.rb:145, :148)
+    ## and is therefore the first point where the pair is known.
+    def self.assert_prebuilt_pair(core_from_source)
+        return if core_from_source || !@@build_from_source
+        abort("[ReactNativeDependencies] Refusing to build the dependencies from source while React Native Core is prebuilt: #{prebuilt_unavailable_reason()}")
+    end
+
     def self.prebuilt_unavailable_reason()
         if ENV["RCT_USE_RN_DEP"] != "1"
             return "RCT_USE_RN_DEP=#{ENV["RCT_USE_RN_DEP"].inspect} opts out of the prebuilt dependencies. Set RCT_USE_PREBUILT_RNCORE=0 as well to build both from source."
@@ -134,26 +156,6 @@ class ReactNativeDependenciesUtils
 
             if @@build_from_source && ENV["RCT_USE_LOCAL_RN_DEP"] && !use_local_xcframework
                 rndeps_log("No local xcframework found, reverting to building from source.")
-            end
-            ## Prebuilt core and prebuilt deps are one choice, not two, and a
-            ## half-fallback is bad whichever way it lands. With a warm Pods/,
-            ## CocoaPods reuses the React-Core-prebuilt spec stored in
-            ## Pods/Local Podspecs from the previous, prebuilt-deps install - a
-            ## :podspec external source is not re-evaluated while a stored copy
-            ## exists - so it still demands the ReactNativeDependencies pod this
-            ## install no longer declares, and resolution fails. From a clean
-            ## Pods/ it resolves instead, and links a core compiled against the
-            ## prebuilt binaries with third-party symbols built from source; that
-            ## one ships without an error at all. Neither --repo-update nor
-            ## --clean-install recovers: the first refreshes spec repos, the
-            ## second only the Xcode project cache. Stop while the reason is
-            ## still known.
-            ## `!= "0"` and not `== "1"`: react_native_pods.rb normalises both
-            ## flags, but a Podfile calling this directly leaves them unset, and
-            ## an unset prebuilt-core flag means prebuilt. Erring toward the abort
-            ## is the safe direction.
-            if @@build_from_source && ENV["RCT_USE_PREBUILT_RNCORE"] != "0"
-                abort("[ReactNativeDependencies] Refusing to build the dependencies from source while React Native Core is prebuilt: #{prebuilt_unavailable_reason()}")
             end
             if @@build_from_source && ENV["RCT_USE_PREBUILT_RNCORE"] && !artifacts_exists
                 rndeps_log("No prebuilt artifacts found, reverting to building from source.")
