@@ -101,6 +101,7 @@
     "scripts/bundle.js",
     "scripts/cocoapods",
     "scripts/codegen",
+    "scripts/android",
     "scripts/compose-source-maps.js",
     "scripts/find-node-for-xcode.sh",
     "scripts/generate-codegen-artifacts.js",

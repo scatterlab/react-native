@@ -44,3 +44,14 @@ Libraries/Components/ScrollView/ScrollViewStickyHeader.js
 # (Simeji and other third-party IMEs) treat that as the document moving under them and
 # drop the composition. See README.md.
 ReactCommon/react/renderer/textlayoutmanager/platform/ios/react/renderer/textlayoutmanager/RCTAttributedTextUtils.mm
+
+# Android text decoration crash: drawSpannedDecoration() passed offsets from the full
+# Spanned into a numberOfLines-truncated Layout, so getPrimaryHorizontal() threw
+# IndexOutOfBoundsException while drawing an underline/strikethrough that the truncation
+# had hidden. Upstream https://github.com/react/react-native/pull/58366 (open).
+# Reaches the app only through this fork's Android prebuilt release - see android-prebuilt.md.
+ReactAndroid/src/main/java/com/facebook/react/views/text/TextDecorationStyle.kt
+
+# Points the consumer's Gradle build at this fork's Android artifacts. Added file, so the
+# gate sees it as a difference from upstream. See android-prebuilt.md.
+scripts/android/scatterlab-prebuilt-maven.gradle

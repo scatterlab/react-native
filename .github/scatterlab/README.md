@@ -256,6 +256,10 @@ controlled는 키스트로크마다 JS를 왕복해 `-_setAttributedString:`을 
 
 검증 절차와 회귀 판정 기준은 [ime-qa.md](ime-qa.md).
 
+## Android prebuilt
+
+Android는 fork의 npm tarball에 든 `ReactAndroid/**` 소스를 아예 컴파일하지 않는다 — RNGP가 `com.facebook.react:react-android:<VERSION_NAME>`을 Maven Central에서 force resolve 하기 때문이다. 패치된 AAR을 실어 보내는 경로는 [`android-prebuilt.md`](android-prebuilt.md)에 있다.
+
 ## iOS prebuilt core를 우리가 만든다
 
 0.86에서 iOS prebuilt는 **opt-out 기본값**이고, prebuilt가 켜지면 `podspec_sources`가 헤더만 반환해 **모든 React\* pod의 구현이 `React.xcframework`에서 온다**(81개 podspec 중 69개가 이 스위치를 탄다). 실측: `RCTUITextView` / `RCTUITextField` / `RCTTextInputComponentView` 세 클래스 모두 상류 0.86.2 아티팩트의 Mach-O에 심볼로 존재한다(`nm -gU React`). 즉 **iOS 소스 수정은 prebuilt가 켜진 채로는 조용히 무효**다.
