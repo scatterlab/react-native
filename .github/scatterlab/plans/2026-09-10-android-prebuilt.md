@@ -1,6 +1,6 @@
 # Android prebuilt 배포 파이프라인 Implementation Plan
 
-**진행 상태:** Task 1–3은 이 브랜치에 완료·커밋됨(`git log --oneline ff27ad0f0d8..bbda7fb082b`). Task 4(fork PR 올리기)·Task 5(zeta-frontend 배선, 다른 레포)·Task 6(출고)는 미착수.
+**진행 상태:** Task 1–3은 이 브랜치에 완료·커밋됨(`git log --oneline ff27ad0f0d8..bbda7fb082b`). Task 4(fork PR 올리기)·Task 6(출고, zeta-frontend 배선 포함)은 미착수. Task 5는 별도 단계로 두지 않는다 — Task 6 Step 5로 병합됨 (이유는 그 자리에 적혀 있다).
 
 > **For agentic workers:** Task 1–3은 완료됐으니 그 구간을 다시 실행하지 말 것. Task 4부터 이어서 진행할 때만 REQUIRED SUB-SKILL로 superpowers:subagent-driven-development(recommended) 또는 superpowers:executing-plans를 쓴다. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -29,7 +29,7 @@
 - Gradle 실행에는 JDK 17 이상이 필요하다. `JAVA_HOME`이 그보다 낮으면 명시한다:
   `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew ...`
 
-**작업 디렉터리:** `~/GitHub/react-native/.claude/worktrees/daewoon+android-prebuilt` (Task 5만 zeta-frontend). 이 워크트리 절대경로로 파일을 연다 — 메인 체크아웃(`~/GitHub/react-native`)을 편집하면 다른 세션의 작업을 오염시킨다.
+**작업 디렉터리:** `~/GitHub/react-native/.claude/worktrees/daewoon+android-prebuilt` (Task 6 Step 5만 zeta-frontend). 이 워크트리 절대경로로 파일을 연다 — 메인 체크아웃(`~/GitHub/react-native`)을 편집하면 다른 세션의 작업을 오염시킨다.
 
 ---
 
@@ -304,7 +304,7 @@ MSG
   - 릴리스 태그 `prebuilt-android-<version>` — Task 3이 이 태그를 만든다.
   - tar 아카이브의 루트는 maven 저장소 루트 자체다 (`com/facebook/react/...`가 최상위). Task 3이 `tar -C /tmp/maven-local -czf ... .`로 만든다.
   - 캐시 경로 `<gradleUserHome>/scatterlab-react-native/<version>/maven`.
-  - 소비자가 apply 할 경로: `<node_modules>/react-native/scripts/android/scatterlab-prebuilt-maven.gradle` — Task 5가 이 경로를 쓴다.
+  - 소비자가 apply 할 경로: `<node_modules>/react-native/scripts/android/scatterlab-prebuilt-maven.gradle` — Task 6 Step 5가 이 경로를 쓴다.
 
 - [x] **Step 1: 실패하는 스모크 테스트를 쓴다**
 
@@ -918,69 +918,9 @@ gh pr create --repo scatterlab/react-native \
 
 ---
 
-### Task 5: zeta-frontend 배선
+### Task 5: (Task 6 Step 5로 병합됨)
 
-**Files:**
-- Modify: `packages/app/android/settings.gradle.kts`
-
-**Interfaces:**
-- Consumes: Task 2가 정한 apply 경로
-- Produces: 없음
-
-`~/GitHub/zeta-frontend` 의 **새 워크트리**에서 한다:
-
-```bash
-cd ~/GitHub/zeta-frontend
-git worktree add .claude/worktrees/daewoon+rn-android-prebuilt -b daewoon/rn-android-prebuilt origin/main
-```
-
-이후 모든 편집은 `~/GitHub/zeta-frontend/.claude/worktrees/daewoon+rn-android-prebuilt/` 절대경로로 한다.
-
-- [ ] **Step 1: apply 한 줄을 넣는다**
-
-`packages/app/android/settings.gradle.kts` 의 `plugins { id("com.facebook.react.settings") }` 블록 **다음**, `extensions.configure<ReactSettingsExtension>` 앞에 넣는다:
-
-```kotlin
-// fork 가 빌드한 Android 아티팩트를 받아 `react.internal.mavenLocalRepo` 로 넘긴다.
-// 없으면 RNGP 가 Maven Central 의 업스트림 AAR 을 쓰고 fork 의 Android 수정이 조용히 빠진다.
-apply(from = "../../../node_modules/react-native/scripts/android/scatterlab-prebuilt-maven.gradle")
-```
-
-**`pluginManagement` 앞에 두지 않는다.** Gradle 은 `pluginManagement` 가 settings 스크립트의 첫 블록일 것을 요구해서, 앞에 어떤 문장이든 오면 평가 자체가 실패한다.
-
-순서는 문제되지 않는다. 스크립트가 거는 `gradle.beforeProject` 는 settings 평가가 **끝난 뒤** 프로젝트 설정 단계에서 실행되고, RNGP 의 `configureRepositories` 는 그보다 더 뒤인 플러그인 apply 시점에 돈다.
-
-- [ ] **Step 2: 프로퍼티가 실제로 RNGP에 도달했는지 확인한다**
-
-이 단계는 fork PR이 머지되고 `-scatterlab.N`이 publish 되어 핀이 갱신된 뒤에만 통과한다 (Task 6). 그 전에는 abort가 정상이다.
-
-```bash
-cd ~/GitHub/zeta-frontend/.claude/worktrees/daewoon+rn-android-prebuilt/packages/app/android
-./gradlew :app:dependencies --configuration prodReleaseRuntimeClasspath 2>&1 | grep -i 'react-android'
-./gradlew :app:dependencies --configuration prodReleaseRuntimeClasspath --info 2>&1 \
-  | grep -i 'scatterlab-react-native' | head
-```
-
-기대: 해석된 `com.facebook.react:react-android` 의 출처 경로에 `scatterlab-react-native/<version>/maven` 이 나온다. Maven Central URL 이 나오면 프로퍼티가 도달하지 않은 것이다 — `apply` 위치가 `pluginManagement` 뒤로 갔거나 `beforeProject` 타이밍 문제다.
-
-- [ ] **Step 3: 커밋하고 PR을 연다**
-
-```bash
-git add packages/app/android/settings.gradle.kts
-git commit -m "$(cat <<'MSG'
-build(app): Android 빌드가 fork 의 prebuilt AAR 을 쓰게 한다
-
-RNGP 가 `com.facebook.react:react-android:<VERSION_NAME>` 을 Maven Central
-에서 force resolve 하므로, 이 줄이 없으면 `@scatterlab/react-native` 의
-Android 네이티브 수정이 빌드에 하나도 안 들어간다.
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-MSG
-)"
-git push origin daewoon/rn-android-prebuilt
-```
-
-PR은 `~/GitHub/zeta-frontend/.github/pull_request_template.md` 를 먼저 Read 해서 섹션 제목(이모지 포함)·인용문·체크리스트를 원본 그대로 유지한 채 내용만 채운다.
+zeta-frontend 배선(apply 한 줄 추가)은 별도 Task로 먼저 처리하지 않는다. `apply(from = ...)`이 가리키는 `scripts/android/scatterlab-prebuilt-maven.gradle`은 fork npm 패키지 안의 파일이고, **`0.87.1-scatterlab.4`부터 처음** 그 패키지에 실린다. zeta-frontend는 지금 `0.87.1-scatterlab.2`에 핀돼 있어 그 버전에는 이 파일이 없다 — 배선 줄만 먼저 커밋하면 그 순간부터 zeta의 모든 Gradle 평가가 `apply(from = ...)`에서 (우리 스크립트의 안내 메시지 있는 abort가 아니라) 평범한 "file not found"로 즉시 죽는다. 그래서 배선 줄과 핀 갱신은 반드시 한 커밋으로, `0.87.1-scatterlab.4`가 npm에 실제로 publish된 뒤에만 넣는다 — Task 6 Step 5를 본다.
 
 ---
 
@@ -1026,9 +966,32 @@ gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scat
 
 publish 직후 **약 1분간 install 이 `ETARGET` 으로 실패한다** (packument 와 dist-tags 캐시가 별개). install 이 되는 것을 확인한 뒤 다음으로 간다.
 
-- [ ] **Step 5: zeta-frontend 핀을 전부 갱신한다**
+- [ ] **Step 5: zeta-frontend 배선 + 핀을 한 커밋으로 올린다**
 
-Task 5의 워크트리에서:
+`apply(from = ...)`이 가리키는 파일은 `0.87.1-scatterlab.4`부터 fork npm 패키지에 처음 실린다. 배선 줄만 먼저 들어가면 zeta의 모든 Gradle 평가가 "file not found"로 즉시 죽으므로 (Task 5 참조), 배선과 핀 갱신은 Step 4의 publish가 끝난 뒤 **한 커밋**으로 같이 간다. `~/GitHub/zeta-frontend`의 **새 워크트리**에서 한다:
+
+```bash
+cd ~/GitHub/zeta-frontend
+git worktree add .claude/worktrees/daewoon+rn-android-prebuilt -b daewoon/rn-android-prebuilt origin/main
+```
+
+이후 모든 편집은 `~/GitHub/zeta-frontend/.claude/worktrees/daewoon+rn-android-prebuilt/` 절대경로로 한다.
+
+**a) apply 한 줄을 넣는다**
+
+`packages/app/android/settings.gradle.kts` 의 `plugins { id("com.facebook.react.settings") }` 블록 **다음**, `extensions.configure<ReactSettingsExtension>` 앞에 넣는다:
+
+```kotlin
+// fork 가 빌드한 Android 아티팩트를 받아 `react.internal.mavenLocalRepo` 로 넘긴다.
+// 없으면 RNGP 가 Maven Central 의 업스트림 AAR 을 쓰고 fork 의 Android 수정이 조용히 빠진다.
+apply(from = "../../../node_modules/react-native/scripts/android/scatterlab-prebuilt-maven.gradle")
+```
+
+**`pluginManagement` 앞에 두지 않는다.** Gradle 은 `pluginManagement` 가 settings 스크립트의 첫 블록일 것을 요구해서, 앞에 어떤 문장이든 오면 평가 자체가 실패한다.
+
+순서는 문제되지 않는다. 스크립트가 거는 `gradle.beforeProject` 는 settings 평가가 **끝난 뒤** 프로젝트 설정 단계에서 실행되고, RNGP 의 `configureRepositories` 는 그보다 더 뒤인 플러그인 apply 시점에 돈다.
+
+**b) 핀을 전부 갱신한다**
 
 ```bash
 cd ~/GitHub/zeta-frontend/.claude/worktrees/daewoon+rn-android-prebuilt
@@ -1043,6 +1006,40 @@ grep -c '0.87.1-scatterlab.2' yarn.lock
 ```
 
 기대: `0`. 0이 아니면 핀을 빠뜨린 것이고, lockfile 에 두 버전이 남아 패키지가 두 벌 해석된다.
+
+**c) 프로퍼티가 실제로 RNGP에 도달했는지 확인한다**
+
+b)에서 핀을 이미 올렸으므로 이 확인은 지금 바로 통과해야 한다.
+
+```bash
+cd ~/GitHub/zeta-frontend/.claude/worktrees/daewoon+rn-android-prebuilt/packages/app/android
+./gradlew :app:dependencies --configuration prodReleaseRuntimeClasspath 2>&1 | grep -i 'react-android'
+./gradlew :app:dependencies --configuration prodReleaseRuntimeClasspath --info 2>&1 \
+  | grep -i 'scatterlab-react-native' | head
+```
+
+기대: 해석된 `com.facebook.react:react-android` 의 출처 경로에 `scatterlab-react-native/<version>/maven` 이 나온다. Maven Central URL 이 나오면 프로퍼티가 도달하지 않은 것이다 — `apply` 위치가 `pluginManagement` 뒤로 갔거나 `beforeProject` 타이밍 문제다.
+
+**d) 커밋하고 PR을 연다**
+
+```bash
+git add packages/app/android/settings.gradle.kts packages/app/package.json packages/core/package.json \
+  packages/service/package.json packages/ui/package.json yarn.lock
+git commit -m "$(cat <<'MSG'
+build(app): Android 빌드가 fork 의 prebuilt AAR 을 쓰게 하고 핀을 0.87.1-scatterlab.4 로 올린다
+
+RNGP 가 `com.facebook.react:react-android:<VERSION_NAME>` 을 Maven Central
+에서 force resolve 하므로, apply 줄이 없으면 `@scatterlab/react-native` 의
+Android 네이티브 수정이 빌드에 하나도 안 들어간다. 그 파일은 0.87.1-scatterlab.4
+부터 패키지에 실리므로 배선과 핀 갱신을 한 커밋으로 묶는다.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+MSG
+)"
+git push origin daewoon/rn-android-prebuilt
+```
+
+PR은 `~/GitHub/zeta-frontend/.github/pull_request_template.md` 를 먼저 Read 해서 섹션 제목(이모지 포함)·인용문·체크리스트를 원본 그대로 유지한 채 내용만 채운다.
 
 - [ ] **Step 6: 실기기로 증상이 사라진 것을 확인한다**
 

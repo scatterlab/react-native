@@ -23,6 +23,7 @@ cleanup() {
 }
 trap cleanup EXIT
 failures=0
+skipped=0
 
 # Lays out <root>/rn/{package.json,scripts/android/<script>} plus a consumer project whose
 # settings.gradle applies the script and whose build.gradle prints the resolved property.
@@ -85,6 +86,15 @@ check_fails() {
   check "$label" "$expected" "$LAST_OUTPUT"
 }
 
+# For environment gaps (no python3, no free local port) rather than behavior failures - never
+# counts toward $failures or the exit code, and is spelled distinctly from "ok " so it can't be
+# misread as a pass while scanning output.
+skip() {
+  local label=$1 reason=$2
+  echo "SKIP - $label ($reason)"
+  skipped=$((skipped + 1))
+}
+
 # A: an upstream version must be a no-op, so this script can ship in a package that is
 #    installed straight from npmjs without a fork suffix.
 dir=$(setup_case upstream "0.87.1")
@@ -122,56 +132,69 @@ check "warm cache is used" \
 #    comment on assetUrl there; unset, the URL is the real GitHub host), then asserts an
 #    artifact lands at the exact Maven path the producer's tar and the consumer's
 #    extract-then-rename have to agree on.
-cold_version="0.87.1-scatterlab.997"
-cold_tag="prebuilt-android-$cold_version"
-cold_asset="react-native-android-maven-$cold_version.tar.gz"
-
-# Built the same way the producer's "Pack the Maven repository" step does: the archive root
-# IS the repository root (tar -C <root> -czf ... .), so a drift there is exactly what this
-# case is meant to catch. Hand-writing the tar differently would test nothing.
-fixture_root="$WORK/fixture-src"
-mkdir -p "$fixture_root/com/facebook/react/react-android/0.87.1"
-echo fixture-pom > "$fixture_root/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
-
-fixtures_dir="$WORK/fixtures/$cold_tag"
-mkdir -p "$fixtures_dir"
-tar -C "$fixture_root" -czf "$fixtures_dir/$cold_asset" .
-( cd "$fixtures_dir" && sha256sum "$cold_asset" | awk '{print $1}' > "$cold_asset.sha256" )
-
-# -u: unbuffered stdout, or the startup line (which the loop below polls for) sits in a
-# pipe buffer indefinitely once stdout isn't a tty.
-python3 -u -m http.server 0 --directory "$WORK/fixtures" --bind 127.0.0.1 > "$WORK/httpd.log" 2>&1 &
-httpd_pid=$!
-disown "$httpd_pid" 2>/dev/null || true  # suppress bash's "Terminated" job-control notice on kill
-port=""
-for _ in $(seq 1 50); do
-  port=$(sed -n 's/.*port \([0-9][0-9]*\).*/\1/p' "$WORK/httpd.log" | head -1)
-  [ -n "$port" ] && break
-  sleep 0.1
-done
-
-if [ -z "$port" ]; then
-  echo "FAIL - cold-cache fixture server did not start"
-  cat "$WORK/httpd.log" >&2
-  failures=$((failures + 1))
+#
+# This whole test runs in the workflow's `prepare` job, gating every release, so an
+# environment gap here (no python3, no free local port) must SKIP this one case rather than
+# fail the script - it is not evidence the consumer script is broken, and a flaky gate on the
+# release path is worse than no gate. Once the server is actually up, every assertion below is
+# a real behavior check and stays a hard failure.
+if ! command -v python3 >/dev/null 2>&1; then
+  skip "cold-cache success path" "python3 not found"
 else
-  dir=$(setup_case cold-cache "$cold_version")
-  SCATTERLAB_PREBUILT_BASE_URL="http://127.0.0.1:$port" run_case "$dir"
-  check "cold cache downloads and extracts" \
-    "PROBE_VALUE=$dir/gradlehome/scatterlab-react-native/$cold_version/maven" \
-    "$LAST_OUTPUT"
-  landed="$dir/gradlehome/scatterlab-react-native/$cold_version/maven/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
-  if [ -f "$landed" ]; then
-    echo "ok   - cold cache lands the fixture artifact at its Maven path"
+  cold_version="0.87.1-scatterlab.997"
+  cold_tag="prebuilt-android-$cold_version"
+  cold_asset="react-native-android-maven-$cold_version.tar.gz"
+
+  # Built the same way the producer's "Pack the Maven repository" step does: the archive root
+  # IS the repository root (tar -C <root> -czf ... .), so a drift there is exactly what this
+  # case is meant to catch. Hand-writing the tar differently would test nothing.
+  fixture_root="$WORK/fixture-src"
+  mkdir -p "$fixture_root/com/facebook/react/react-android/0.87.1"
+  echo fixture-pom > "$fixture_root/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
+
+  fixtures_dir="$WORK/fixtures/$cold_tag"
+  mkdir -p "$fixtures_dir"
+  tar -C "$fixture_root" -czf "$fixtures_dir/$cold_asset" .
+  ( cd "$fixtures_dir" && sha256sum "$cold_asset" | awk '{print $1}' > "$cold_asset.sha256" )
+
+  # -u: unbuffered stdout, or the startup line (which the loop below polls for) sits in a
+  # pipe buffer indefinitely once stdout isn't a tty.
+  python3 -u -m http.server 0 --directory "$WORK/fixtures" --bind 127.0.0.1 > "$WORK/httpd.log" 2>&1 &
+  httpd_pid=$!
+  disown "$httpd_pid" 2>/dev/null || true  # suppress bash's "Terminated" job-control notice on kill
+  port=""
+  for _ in $(seq 1 50); do
+    port=$(sed -n 's/.*port \([0-9][0-9]*\).*/\1/p' "$WORK/httpd.log" | head -1)
+    [ -n "$port" ] && break
+    sleep 0.1
+  done
+
+  if [ -z "$port" ]; then
+    skip "cold-cache success path" "fixture server did not start"
+    cat "$WORK/httpd.log" >&2
   else
-    echo "FAIL - cold cache lands the fixture artifact at its Maven path"
-    echo "       expected: $landed"
-    failures=$((failures + 1))
+    dir=$(setup_case cold-cache "$cold_version")
+    SCATTERLAB_PREBUILT_BASE_URL="http://127.0.0.1:$port" run_case "$dir"
+    check "cold cache downloads and extracts" \
+      "PROBE_VALUE=$dir/gradlehome/scatterlab-react-native/$cold_version/maven" \
+      "$LAST_OUTPUT"
+    landed="$dir/gradlehome/scatterlab-react-native/$cold_version/maven/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
+    if [ -f "$landed" ]; then
+      echo "ok   - cold cache lands the fixture artifact at its Maven path"
+    else
+      echo "FAIL - cold cache lands the fixture artifact at its Maven path"
+      echo "       expected: $landed"
+      failures=$((failures + 1))
+    fi
   fi
+
+  kill "$httpd_pid" 2>/dev/null || true
+  httpd_pid=""
 fi
 
-kill "$httpd_pid" 2>/dev/null || true
-httpd_pid=""
-
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
-echo "all cases passed"
+if [ "$skipped" -gt 0 ]; then
+  echo "all cases passed ($skipped skipped)"
+else
+  echo "all cases passed"
+fi
