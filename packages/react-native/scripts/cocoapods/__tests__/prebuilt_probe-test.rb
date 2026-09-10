@@ -11,7 +11,7 @@ require_relative "../rncore.rb"
 
 class PrebuiltProbeTests < Test::Unit::TestCase
 
-    ENV_KEYS = %w[PATH RCT_USE_RN_DEP RCT_USE_PREBUILT_RNCORE RCT_USE_LOCAL_RN_DEP RCT_TESTONLY_RNCORE_TARBALL_PATH ENTERPRISE_REPOSITORY CURL_HOME]
+    ENV_KEYS = %w[PATH RCT_DEPS_VERSION RCT_USE_RN_DEP RCT_USE_PREBUILT_RNCORE RCT_USE_LOCAL_RN_DEP RCT_TESTONLY_RNCORE_TARBALL_PATH ENTERPRISE_REPOSITORY CURL_HOME]
 
     def setup
         @saved_env = ENV_KEYS.to_h { |key| [key, ENV[key]] }
@@ -256,6 +256,32 @@ class PrebuiltProbeTests < Test::Unit::TestCase
         end
     ensure
         File.unlink(tarball) if File.exist?(tarball)
+    end
+
+    # setup_rncore latches on its first call, but deps re-runs its whole body
+    # whenever RCT_DEPS_VERSION is set to an empty string. A multi-target Podfile
+    # calling use_react_native! twice can therefore flip deps to source after the
+    # core has settled, so the pair check cannot live inside the core's guard.
+    def test_setupPair_whenDepsFlipsOnAReentrantCall_stillAborts
+        ENV["RCT_USE_RN_DEP"] = "1"
+        ENV["RCT_USE_PREBUILT_RNCORE"] = "1"
+        ENV["RCT_DEPS_VERSION"] = ""
+        deps_calls = 0
+        server = start_server do |_n, request|
+            next ["200 OK", ""] unless request.include?("-dependencies-")
+            deps_calls += 1
+            [deps_calls == 1 ? "200 OK" : "404 Not Found", ""]
+        end
+        stub_fork_release_url(url_for(server, "/react-native-artifacts-core-debug.tar.gz"))
+        ENV["ENTERPRISE_REPOSITORY"] = "http://127.0.0.1:#{server[:port]}"
+
+        ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", VERSION)
+        ReactNativeCoreUtils.setup_rncore("/rn", VERSION)
+
+        assert_raise(SystemExit) do
+            ReactNativeDependenciesUtils.setup_react_native_dependencies("/rn", VERSION)
+            ReactNativeCoreUtils.setup_rncore("/rn", VERSION)
+        end
     end
 
     # With FORK_REQUIRES_OWN_PREBUILT off, an unreachable artifact host drops the

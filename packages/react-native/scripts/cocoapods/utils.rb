@@ -54,6 +54,11 @@ class ReactNativePodsUtils
         # ENTERPRISE_REPOSITORY is user-supplied, so that input is reachable.
         host = (URI(tarball_url).host rescue nil) || "unknown host"
         {
+            # Both halves: curl can report a status from an earlier hop and still
+            # fail overall (headers received, then the connection stalls past
+            # --max-time). Untested - reproducing it deterministically needs
+            # --retry 0, which would mean widening this method's signature for
+            # the test alone.
             :ok => curl_exit == 0 && http_code == "200",
             :http_code => http_code,
             :curl_exit => curl_exit,

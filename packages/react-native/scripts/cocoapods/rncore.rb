@@ -84,8 +84,12 @@ class ReactNativeCoreUtils
                 rncore_log("No prebuilt artifacts found, reverting to building from source.")
             end
             rncore_log("Building from source: #{@@build_from_source}")
-            ReactNativeDependenciesUtils.assert_prebuilt_pair(@@build_from_source)
         end
+        ## Outside the guard above: this call latches after the first
+        ## use_react_native!, but deps re-runs its whole body whenever
+        ## RCT_DEPS_VERSION is an empty string, so a second call can still flip
+        ## the pair apart. Re-assert on every call.
+        ReactNativeDependenciesUtils.assert_prebuilt_pair(@@build_from_source)
     end
 
     def self.abort_if_use_local_rncore_with_no_file()
