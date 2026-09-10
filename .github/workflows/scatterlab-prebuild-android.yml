@@ -131,10 +131,29 @@ jobs:
           unzip -q "/tmp/maven-local/com/facebook/react/react-android/$BASE/react-android-$BASE-release.aar" \
             classes.jar -d "$WORK"
           mkdir -p "$WORK/classes" && unzip -q "$WORK/classes.jar" -d "$WORK/classes"
-          COUNT=$(find "$WORK/classes" -name '*.class' -exec javap -p {} + 2>/dev/null | grep -c "$SYMBOL" || true)
+
+          # A broken javap (missing JDK, corrupt classes) would otherwise converge to the
+          # same COUNT=0 as "the symbol really isn't there". Check the disassembly itself
+          # ran before trusting a zero count.
+          set +e
+          DISASM=$(find "$WORK/classes" -name '*.class' -exec javap -p {} + 2>"$WORK/javap.err")
+          FIND_STATUS=$?
+          set -e
+          if [ "$FIND_STATUS" -ne 0 ] || [ -z "$DISASM" ]; then
+            echo "::error::javap failed to disassemble the release AAR's classes (exit $FIND_STATUS) - that is a broken toolchain, not evidence '$SYMBOL' is missing"
+            cat "$WORK/javap.err" >&2
+            exit 1
+          fi
+
+          COUNT=$(printf '%s\n' "$DISASM" | grep -c "$SYMBOL" || true)
           echo "'$SYMBOL' occurrences in the release AAR: $COUNT"
           [ "$COUNT" -gt 0 ] || { echo "::error::'$SYMBOL' is not in the built AAR - the sources that went in are not the ones you think"; exit 1; }
           rm -rf "$WORK"
+
+      - name: Warn if the patch-presence gate was skipped
+        if: ${{ inputs.verify_symbol == '' }}
+        run: |
+          echo "::warning::verify_symbol was left empty, so this release skips the only check that proves this version's patch is in the built AAR. Every fork version publishes the same Maven coordinate - 'the artifact exists' proves nothing about which sources went in. Leave this empty only for a release that genuinely adds no new symbol."
 
       - name: Pack the Maven repository
         id: pack
@@ -158,7 +177,7 @@ jobs:
           path: ${{ steps.pack.outputs.dir }}
           if-no-files-found: error
 
-      - name: Create the release and upload the assets
+      - name: Create the release (draft) and upload the assets
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -167,12 +186,24 @@ jobs:
           DIR: ${{ steps.pack.outputs.dir }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # A published release is already visible to consumers - re-running into it
+            # would upload assets nobody re-verifies. Only a draft left by an earlier,
+            # not-yet-verified run of this workflow is safe to reuse.
+            IS_DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft)
+            if [ "$IS_DRAFT" != "true" ]; then
+              echo "::error::release $TAG already exists and is published. Re-running this workflow would upload into a release consumers can already see - cut a new -scatterlab.N instead."
+              exit 1
+            fi
+          else
+            # Draft: invisible to anyone without push access, and its asset URLs 404 for
+            # everyone else. A consumer that races this window gets a 404 and aborts - the
+            # correct fail-closed outcome until the verify job promotes it below.
             gh release create "$TAG" \
               --target "$GITHUB_SHA" \
               --title "Android prebuilt for $VERSION" \
               --notes "com.facebook.react Maven artifacts built from this fork for @scatterlab/react-native@$VERSION. Consumed by scripts/android/scatterlab-prebuilt-maven.gradle." \
-              --prerelease
+              --prerelease --draft
           fi
           # No --clobber: a consumer with a warm cache cannot detect a replaced asset and
           # would keep the old AAR forever. Publish a new -scatterlab.N instead.
@@ -194,8 +225,10 @@ jobs:
     needs: [prepare, build]
     if: ${{ !inputs.dry_run }}
     runs-on: arc-messenger-dev
+    permissions:
+      contents: write
     steps:
-      - name: Assert the release is consumable
+      - name: Assert the release is consumable, then publish it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -210,15 +243,21 @@ jobs:
           printf '%s\n%s\n' "$ASSET" "$ASSET.sha256" | sort > /tmp/expected
           diff /tmp/expected /tmp/actual
 
-          URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
-          curl -sL -o /tmp/asset.tar.gz "$URL"
-          EXPECTED=$(curl -sL "$URL.sha256" | tr -d '[:space:]')
-          ACTUAL=$(sha256sum /tmp/asset.tar.gz | awk '{print $1}')
+          # The release is still a draft here, so its public releases/download/ URL 404s
+          # for everyone, us included. `gh release download` goes through the authenticated
+          # API asset endpoint instead, which serves draft assets to GH_TOKEN.
+          DL=$(mktemp -d)
+          gh release download "$TAG" --dir "$DL" -p "$ASSET" -p "$ASSET.sha256"
+          EXPECTED=$(tr -d '[:space:]' < "$DL/$ASSET.sha256")
+          ACTUAL=$(sha256sum "$DL/$ASSET" | awk '{print $1}')
           [ "$EXPECTED" = "$ACTUAL" ] || { echo "::error::sha256 mismatch: $EXPECTED vs $ACTUAL"; exit 1; }
 
           for f in "react-android-$BASE-debug.aar" "react-android-$BASE-release.aar" \
                    "react-android-$BASE.module" "react-android-$BASE.pom"; do
-            tar tzf /tmp/asset.tar.gz "./com/facebook/react/react-android/$BASE/$f" >/dev/null \
+            tar tzf "$DL/$ASSET" "./com/facebook/react/react-android/$BASE/$f" >/dev/null \
               || { echo "::error::$f is missing from the archive"; exit 1; }
           done
+
+          # Only now does the release become visible to consumers.
+          gh release edit "$TAG" --draft=false
           echo "release $TAG is consumable"
