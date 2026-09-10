@@ -19,19 +19,46 @@
 import java.security.MessageDigest
 
 def packageJson = new File(buildscript.sourceFile.parentFile, '../../package.json').canonicalFile
-def version = new groovy.json.JsonSlurper().parse(packageJson).version
+def pkg = new groovy.json.JsonSlurper().parse(packageJson)
 
-// Upstream react-native: nothing of ours to fetch. Stay out of the way entirely.
-if (!(version ==~ /^\d+\.\d+\.\d+-scatterlab\.\d+$/)) {
+// Decide by package identity, not by the shape of a version string: an upstream
+// react-native install has nothing of ours to fetch, so stay out of the way entirely.
+if (pkg.name != '@scatterlab/react-native') {
   return
 }
 
+def version = pkg.version
+if (!(version ==~ /^\d+\.\d+\.\d+-scatterlab\.\d+$/)) {
+  // Our package, but a version this script cannot map to a release. Returning here would
+  // hand the build back to Maven Central and ship the unpatched upstream AAR in silence.
+  throw new GradleException(
+      "[scatterlab] ${packageJson} is @scatterlab/react-native at version '${version}', which\n" +
+      "  does not name a prebuilt Android release (expected e.g. 0.87.1-scatterlab.3).\n" +
+      "  Continuing would resolve the unpatched upstream AAR from Maven Central instead.")
+}
+
+def base = version.replaceFirst(/-scatterlab\.\d+$/, '')
 def tag = "prebuilt-android-${version}"
 def asset = "react-native-android-maven-${version}.tar.gz"
-// SCATTERLAB_PREBUILT_BASE_URL exists only for the cold-cache case of
-// android-prebuilt-consumer-test.sh, to point the download at a local fixture server
-// instead of the real release. Unset (the production path), it is exactly the real host.
-def baseUrl = System.getenv('SCATTERLAB_PREBUILT_BASE_URL') ?: 'https://github.com/scatterlab/react-native/releases/download'
+
+// SCATTERLAB_PREBUILT_BASE_URL redirects the download at the local fixture server of
+// android-prebuilt-consumer-test.sh. It is honoured only for a loopback origin: the .sha256
+// sidecar is fetched from the same base, so any other origin would supply both the archive
+// and the checksum it is verified against, and the integrity gate would prove nothing.
+// Binding loopback on the build machine already means owning that build.
+def overrideBaseUrl = System.getenv('SCATTERLAB_PREBUILT_BASE_URL')
+def overrideHost = null
+if (overrideBaseUrl) {
+  try {
+    overrideHost = new java.net.URI(overrideBaseUrl).host
+  } catch (java.net.URISyntaxException ignored) {
+    overrideHost = null
+  }
+}
+def loopbackOverride = overrideHost in ['127.0.0.1', '[::1]', 'localhost']
+def baseUrl = loopbackOverride
+    ? overrideBaseUrl
+    : 'https://github.com/scatterlab/react-native/releases/download'
 def assetUrl = "${baseUrl}/${tag}/${asset}"
 
 // Scoped by fork version on purpose. VERSION_NAME is pinned to the base, so every fork
@@ -46,6 +73,14 @@ def fail = { String why ->
       "  exist in this fork's prebuilt artifacts. Run the '[scatterlab] Build Android prebuilt'\n" +
       "  workflow for ${version}, then build again.\n" +
       "  Expected: ${assetUrl}")
+}
+
+if (overrideBaseUrl && !loopbackOverride) {
+  fail("SCATTERLAB_PREBUILT_BASE_URL is set to '${overrideBaseUrl}', whose host is not a" +
+       " loopback address (127.0.0.1, [::1], localhost). It exists only to point the smoke" +
+       " test at a local fixture server; from any other origin the archive and the .sha256" +
+       " it is checked against would come from the same place, so refusing rather than" +
+       " falling back to the real release.")
 }
 
 def download = { String url, File target ->
@@ -77,7 +112,15 @@ def sha256 = { File file ->
   digest.digest().encodeHex().toString()
 }
 
-if (!repoDir.isDirectory()) {
+// "The directory exists" is not "the cache is good": an interrupted extract or a partial
+// cleanup leaves a tree Gradle cannot resolve from, and the property would point at it.
+// The .pom is the cheapest artifact that only exists once the archive really landed.
+def cachedPom = new File(repoDir, "com/facebook/react/react-android/${base}/react-android-${base}.pom")
+
+if (!cachedPom.isFile()) {
+  // A cache that fails the check above is corrupt, not fatal - drop it and re-download so
+  // it self-heals. The delete also clears the way for the rename below.
+  repoDir.deleteDir()
   // Staged next to the final location, not in /tmp: the move below has to be a rename on
   // the same filesystem, or a half-copied tree can be left behind as a cache hit.
   repoDir.parentFile.mkdirs()
@@ -107,7 +150,7 @@ if (!repoDir.isDirectory()) {
 
     // Move only once the tree is complete: a half-extracted directory must never be left
     // behind as a cache hit for the next build.
-    if (!extracted.renameTo(repoDir) && !repoDir.isDirectory()) {
+    if (!extracted.renameTo(repoDir) && !cachedPom.isFile()) {
       fail("could not move the extracted repository into ${repoDir}.")
     }
   } finally {

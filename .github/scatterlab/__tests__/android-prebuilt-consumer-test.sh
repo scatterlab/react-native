@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test for scripts/android/scatterlab-prebuilt-maven.gradle.
 #
-# The script locates the package version relative to its own file, so each case builds a
-# throwaway tree that mimics node_modules/react-native and copies the script into it.
+# The script reads the package name and version relative to its own file, so each case builds
+# a throwaway tree that mimics node_modules/react-native and copies the script into it.
 # GRADLE_USER_HOME is sandboxed per case so a warm cache from one case cannot leak into
 # another - the whole point of the script is what it does when the cache is cold.
 set -euo pipefail
@@ -16,10 +16,16 @@ WORK=$(cd "$WORK" && pwd -P)  # resolve symlinks (e.g. macOS /var -> /private/va
                               # make case C compare against a path Gradle never reports.
 httpd_pid=""
 cleanup() {
+  # Preserve the script's own exit status: the Gradle daemons started per case keep writing
+  # into their sandboxed GRADLE_USER_HOME after the build returns, so the rm below races them
+  # and can fail. That is housekeeping, not a verdict - it must never turn a passing run red
+  # (or, worse, a failing one green).
+  local rc=$?
   if [ -n "$httpd_pid" ]; then
     kill "$httpd_pid" 2>/dev/null || true
   fi
-  rm -rf "$WORK"
+  rm -rf "$WORK" 2>/dev/null || true
+  exit "$rc"
 }
 trap cleanup EXIT
 failures=0
@@ -27,11 +33,13 @@ skipped=0
 
 # Lays out <root>/rn/{package.json,scripts/android/<script>} plus a consumer project whose
 # settings.gradle applies the script and whose build.gradle prints the resolved property.
+# The package name defaults to this fork's, since that is what the script keys on; case A
+# passes the upstream name to exercise the no-op path.
 setup_case() {
-  local name=$1 version=$2
+  local name=$1 version=$2 pkg_name=${3:-@scatterlab/react-native}
   local dir="$WORK/$name"
   mkdir -p "$dir/rn/scripts/android" "$dir/app" "$dir/gradlehome"
-  printf '{"name":"react-native","version":"%s"}\n' "$version" > "$dir/rn/package.json"
+  printf '{"name":"%s","version":"%s"}\n' "$pkg_name" "$version" > "$dir/rn/package.json"
   cp "$SCRIPT" "$dir/rn/scripts/android/"
   cat > "$dir/app/settings.gradle" <<EOF
 apply from: '../rn/scripts/android/scatterlab-prebuilt-maven.gradle'
@@ -86,20 +94,35 @@ check_fails() {
   check "$label" "$expected" "$LAST_OUTPUT"
 }
 
-# For environment gaps (no python3, no free local port) rather than behavior failures - never
-# counts toward $failures or the exit code, and is spelled distinctly from "ok " so it can't be
-# misread as a pass while scanning output.
+# For environment gaps (no python3, no free local port) rather than behavior failures.
+# Always annotates, so the gap is visible in a folded Actions log instead of hiding inside
+# "all cases passed". Under CI it is a hard failure: these runners are ours, so a missing
+# python3 is a runner defect to learn about on the first dry run, not coverage to lose
+# silently on every release. Locally it stays a skip.
 skip() {
   local label=$1 reason=$2
-  echo "SKIP - $label ($reason)"
-  skipped=$((skipped + 1))
+  echo "::warning::android-prebuilt-consumer-test skipped '$label' ($reason)"
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL - $label (skipped under CI: $reason)"
+    failures=$((failures + 1))
+  else
+    echo "SKIP - $label ($reason)"
+    skipped=$((skipped + 1))
+  fi
 }
 
-# A: an upstream version must be a no-op, so this script can ship in a package that is
-#    installed straight from npmjs without a fork suffix.
-dir=$(setup_case upstream "0.87.1")
+# A: an upstream install must be a no-op, so this script can ship in a package that is
+#    installed straight from npmjs. The discriminator is the package name, not the version
+#    shape - an upstream nightly or rc must be just as untouched.
+dir=$(setup_case upstream "0.87.1" "react-native")
 run_case "$dir"
-check "upstream version leaves the property unset" "PROBE_SET=false" "$LAST_OUTPUT"
+check "upstream package leaves the property unset" "PROBE_SET=false" "$LAST_OUTPUT"
+
+# A2: our package at a version that names no release must stop the build rather than fall
+#     through to Maven Central. This is the shape a nightly or an rc suffix would take.
+dir=$(setup_case unresolvable "0.87.1-scatterlab.4-rc.1")
+run_case "$dir"
+check_fails "an unresolvable fork version aborts" "does not name a prebuilt Android release"
 
 # B: a fork version with no release must stop the build. Falling through to Maven Central
 #    would ship the unpatched upstream AAR with no error. The abort message is asserted on
@@ -117,27 +140,42 @@ run_case "$missing_dir_nodns" \
   -Dhttps.proxyHost=react-native-prebuilt-test.invalid -Dhttps.proxyPort=1
 check_fails "missing release aborts (no network / DNS broken)" "prebuilt-android-0.87.1-scatterlab.999"
 
-# C: a warm cache must be used as-is, with no network. --offline makes any download attempt
-#    fail loudly instead of quietly succeeding on a machine that happens to be online.
+# C: a warm cache must be reused as-is, with no network. The cache is staged with the .pom
+#    the script checks for, because an empty directory is exactly what must NOT count as
+#    warm (see case C2). Gradle's --offline does not cover this - the script downloads
+#    through a raw URL.openConnection() that Gradle knows nothing about - so "no network"
+#    is proved by pointing the base URL at a closed loopback port: any download attempt
+#    would be refused and fail the build, and the case passing means none was made.
 dir=$(setup_case cached "0.87.1-scatterlab.998")
-mkdir -p "$dir/gradlehome/scatterlab-react-native/0.87.1-scatterlab.998/maven"
+cached_maven="$dir/gradlehome/scatterlab-react-native/0.87.1-scatterlab.998/maven"
+mkdir -p "$cached_maven/com/facebook/react/react-android/0.87.1"
+echo cached-pom > "$cached_maven/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
+SCATTERLAB_PREBUILT_BASE_URL="http://127.0.0.1:1" run_case "$dir"
+check "warm cache is used with no download" "PROBE_VALUE=$cached_maven" "$LAST_OUTPUT"
+
+# C2: a directory that exists but holds no artifact is a broken cache, not a warm one. The
+#     script must re-download rather than hand Gradle a tree it cannot resolve from - here
+#     there is no release to re-download, so "it tried" shows up as the usual abort.
+dir=$(setup_case cached-empty "0.87.1-scatterlab.995")
+mkdir -p "$dir/gradlehome/scatterlab-react-native/0.87.1-scatterlab.995/maven"
 run_case "$dir"
-check "warm cache is used" \
-  "PROBE_VALUE=$dir/gradlehome/scatterlab-react-native/0.87.1-scatterlab.998/maven" \
-  "$LAST_OUTPUT"
+check_fails "an empty cache directory is not treated as warm" "prebuilt-android-0.87.1-scatterlab.995"
+
+# E: SCATTERLAB_PREBUILT_BASE_URL is a test seam, and the .sha256 sidecar comes from the same
+#    base - so a non-loopback origin would hand over the archive and its own checksum. It must
+#    stop the build, not quietly fall back to the real release (which would mask the
+#    misconfiguration and hide that someone set the variable at all).
+dir=$(setup_case rogue-base-url "0.87.1-scatterlab.994")
+SCATTERLAB_PREBUILT_BASE_URL="http://prebuilt-test-rogue.invalid/releases/download" run_case "$dir"
+check_fails "a non-loopback SCATTERLAB_PREBUILT_BASE_URL is rejected" \
+  "whose host is not a loopback address"
 
 # D: cold-cache success path - the one every first build on a developer machine or CI runner
 #    takes, and the one no case above covers. Serves a fixture release over a real local HTTP
-#    server via SCATTERLAB_PREBUILT_BASE_URL (consulted by the script only when set - see the
-#    comment on assetUrl there; unset, the URL is the real GitHub host), then asserts an
-#    artifact lands at the exact Maven path the producer's tar and the consumer's
-#    extract-then-rename have to agree on.
-#
-# This whole test runs in the workflow's `prepare` job, gating every release, so an
-# environment gap here (no python3, no free local port) must SKIP this one case rather than
-# fail the script - it is not evidence the consumer script is broken, and a flaky gate on the
-# release path is worse than no gate. Once the server is actually up, every assertion below is
-# a real behavior check and stays a hard failure.
+#    server via SCATTERLAB_PREBUILT_BASE_URL (consulted by the script only when set and
+#    loopback - see the comment on overrideBaseUrl there; unset, the URL is the real GitHub
+#    host), then asserts an artifact lands at the exact Maven path the producer's tar and the
+#    consumer's extract-then-rename have to agree on.
 if ! command -v python3 >/dev/null 2>&1; then
   skip "cold-cache success path" "python3 not found"
 else

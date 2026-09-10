@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       verify_symbol:
-        description: 'Identifier this version introduces, asserted to exist in the built AAR (e.g. visibleTextEnd). Leave empty for releases that add no new symbol.'
+        description: 'Identifier this version introduces, asserted to be absent from the upstream base AAR and present in the one built here (e.g. visibleTextEnd). Required for a real release. Pass the literal (none) - parentheses make it something no identifier can be - only for a release that genuinely adds no new symbol, such as a bare base bump.'
         required: false
         default: ''
         type: string
@@ -31,6 +31,15 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  # Two dispatches for the same version race over a single draft release: the second deletes
+  # the first's draft and uploads its own assets, and the first's `verify` then promotes
+  # artifacts it never built - possibly from a different ref. Queue rather than cancel: a run
+  # killed mid-flight can leave assets uploaded and the draft unpromoted, which is worse than
+  # a run that waits.
+  group: scatterlab-prebuild-android-${{ inputs.version }}
+  cancel-in-progress: false
 
 jobs:
   prepare:
@@ -49,6 +58,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
+          VERIFY_SYMBOL: ${{ inputs.verify_symbol }}
         run: |
           set -euo pipefail
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-scatterlab\.[0-9]+$ ]]; then
@@ -56,6 +66,17 @@ jobs:
             exit 1
           fi
           BASE="${VERSION%-scatterlab.*}"
+
+          # The patch-presence gate in `build` is the only evidence that a release's artifacts
+          # came from the sources its version claims - every fork version publishes the
+          # identical Maven coordinate. Accepting the dispatch form's defaults must therefore
+          # not turn it off: an empty value fails a real release, and opting out has to be
+          # spelled out.
+          if [ "$DRY_RUN" != "true" ] && [ -z "$VERIFY_SYMBOL" ]; then
+            echo "::error::verify_symbol is required for a real release. Pass the identifier this version introduces, or the literal (none) if it genuinely adds no new symbol."
+            exit 1
+          fi
+
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "tag=prebuilt-android-$VERSION" >> "$GITHUB_OUTPUT"
           echo "asset=react-native-android-maven-$VERSION.tar.gz" >> "$GITHUB_OUTPUT"
@@ -100,6 +121,8 @@ jobs:
     runs-on: arc-messenger-dev
     permissions:
       contents: write
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -141,42 +164,60 @@ jobs:
             [ -f "$DIR/$f" ] || { echo "::error::$DIR/$f is missing"; exit 1; }
           done
 
-      - name: Assert the patch is in the built AAR
-        if: ${{ inputs.verify_symbol != '' }}
+      - name: Assert the patch is in the built AAR and not in the upstream one
+        if: ${{ inputs.verify_symbol != '' && inputs.verify_symbol != '(none)' }}
         env:
           BASE: ${{ needs.prepare.outputs.base }}
           SYMBOL: ${{ inputs.verify_symbol }}
         run: |
           set -euo pipefail
           # Every fork version publishes the same coordinate, so "the artifact exists" proves
-          # nothing about which sources went into it. This is the only check that does.
+          # nothing about which sources went into it. Neither does "the symbol is in our AAR"
+          # on its own: a typo, or an identifier upstream already has, passes that with no
+          # patch present. What means something is the pair - absent upstream, present here.
           WORK=$(mktemp -d)
-          unzip -q "/tmp/maven-local/com/facebook/react/react-android/$BASE/react-android-$BASE-release.aar" \
-            classes.jar -d "$WORK"
-          mkdir -p "$WORK/classes" && unzip -q "$WORK/classes.jar" -d "$WORK/classes"
 
-          # A broken javap (missing JDK, corrupt classes) would otherwise converge to the
-          # same COUNT=0 as "the symbol really isn't there". Check the disassembly itself
-          # ran before trusting a zero count.
-          set +e
-          DISASM=$(find "$WORK/classes" -name '*.class' -exec javap -p {} + 2>"$WORK/javap.err")
-          FIND_STATUS=$?
-          set -e
-          if [ "$FIND_STATUS" -ne 0 ] || [ -z "$DISASM" ]; then
-            echo "::error::javap failed to disassemble the release AAR's classes (exit $FIND_STATUS) - that is a broken toolchain, not evidence '$SYMBOL' is missing"
-            cat "$WORK/javap.err" >&2
-            exit 1
-          fi
+          # Sets COUNT to the number of disassembly lines mentioning $SYMBOL in AAR $1.
+          count_symbol() {
+            local aar=$1 label=$2 dir disasm status
+            dir="$WORK/$label"
+            mkdir -p "$dir/classes"
+            unzip -q "$aar" classes.jar -d "$dir"
+            unzip -q "$dir/classes.jar" -d "$dir/classes"
 
-          COUNT=$(printf '%s\n' "$DISASM" | grep -cF "$SYMBOL" || true)
-          echo "'$SYMBOL' occurrences in the release AAR: $COUNT"
+            # A broken javap (missing JDK, corrupt classes) would otherwise converge to the
+            # same COUNT=0 as "the symbol really isn't there". Check the disassembly itself
+            # ran before trusting a zero count.
+            set +e
+            disasm=$(find "$dir/classes" -name '*.class' -exec javap -p {} + 2>"$dir/javap.err")
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ] || [ -z "$disasm" ]; then
+              echo "::error::javap failed to disassemble the $label AAR's classes (exit $status) - that is a broken toolchain, not evidence '$SYMBOL' is missing"
+              cat "$dir/javap.err" >&2
+              exit 1
+            fi
+            COUNT=$(printf '%s\n' "$disasm" | grep -cF "$SYMBOL" || true)
+          }
+
+          # The baseline. One extra download on the release path, and the only thing that
+          # makes a non-zero count below mean "this fork added it" rather than "it was
+          # always there".
+          curl -fsSL --retry 3 -o "$WORK/upstream.aar" \
+            "https://repo1.maven.org/maven2/com/facebook/react/react-android/$BASE/react-android-$BASE-release.aar"
+          count_symbol "$WORK/upstream.aar" upstream
+          echo "'$SYMBOL' occurrences in the upstream $BASE release AAR: $COUNT"
+          [ "$COUNT" -eq 0 ] || { echo "::error::'$SYMBOL' is already in the upstream $BASE AAR, so finding it in ours proves nothing about this fork's patch. Pass an identifier this version introduces."; exit 1; }
+
+          count_symbol "/tmp/maven-local/com/facebook/react/react-android/$BASE/react-android-$BASE-release.aar" fork
+          echo "'$SYMBOL' occurrences in the built release AAR: $COUNT"
           [ "$COUNT" -gt 0 ] || { echo "::error::'$SYMBOL' is not in the built AAR - the sources that went in are not the ones you think"; exit 1; }
           rm -rf "$WORK"
 
       - name: Warn if the patch-presence gate was skipped
-        if: ${{ inputs.verify_symbol == '' }}
+        if: ${{ inputs.verify_symbol == '' || inputs.verify_symbol == '(none)' }}
         run: |
-          echo "::warning::verify_symbol was left empty, so this release skips the only check that proves this version's patch is in the built AAR. Every fork version publishes the same Maven coordinate - 'the artifact exists' proves nothing about which sources went in. Leave this empty only for a release that genuinely adds no new symbol."
+          echo "::warning::verify_symbol is empty or (none), so this build skips the only check that proves this version's patch is in the built AAR. Every fork version publishes the same Maven coordinate - 'the artifact exists' proves nothing about which sources went in. A real release cannot leave it empty; (none) is for a release that genuinely adds no new symbol."
 
       - name: Pack the Maven repository
         id: pack
@@ -192,6 +233,9 @@ jobs:
           ( cd "$OUT" && sha256sum "$ASSET" | awk '{print $1}' > "$ASSET.sha256" )
           ls -lh "$OUT"
           echo "dir=$OUT" >> "$GITHUB_OUTPUT"
+          # Carried to `verify` so it can tie the release's asset to the archive this run
+          # actually produced, rather than to whatever happens to be attached to the tag.
+          echo "sha256=$(cat "$OUT/$ASSET.sha256")" >> "$GITHUB_OUTPUT"
 
       - name: Upload the assets as artifacts
         uses: actions/upload-artifact@v4
@@ -258,9 +302,16 @@ jobs:
       - name: Assert the release is consumable, then publish it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job runs without actions/checkout - it needs no working tree - but
+          # `gh release view/download/edit` resolve the repository from the current
+          # directory's git remote and would abort with "could not determine base
+          # repository". GH_REPO overrides that resolution for commands that otherwise
+          # operate on a local repository (`gh help environment`).
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
           ASSET: ${{ needs.prepare.outputs.asset }}
           BASE: ${{ needs.prepare.outputs.base }}
+          BUILT_SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
           set -euo pipefail
           # The REST "get a release by tag" endpoint (`gh api repos/.../releases/tags/<tag>`)
@@ -273,6 +324,16 @@ jobs:
           printf '%s\n%s\n' "$ASSET" "$ASSET.sha256" | sort > /tmp/expected
           diff /tmp/expected /tmp/actual
 
+          # The checks in this job are otherwise self-consistent - any well-formed archive
+          # passes them - so nothing would tie what gets promoted to what `build` produced.
+          # The release was created with --target "$GITHUB_SHA", so a different value means
+          # a different run's draft is sitting on this tag.
+          TARGET=$(gh release view "$TAG" --json targetCommitish -q .targetCommitish)
+          if [ "$TARGET" != "$GITHUB_SHA" ]; then
+            echo "::error::release $TAG targets $TARGET, not this run's commit $GITHUB_SHA - it was created by a different run"
+            exit 1
+          fi
+
           # The release is still a draft here, so its public releases/download/ URL 404s
           # for everyone, us included. `gh release download` goes through the authenticated
           # API asset endpoint instead, which serves draft assets to GH_TOKEN.
@@ -281,6 +342,12 @@ jobs:
           EXPECTED=$(tr -d '[:space:]' < "$DL/$ASSET.sha256")
           ACTUAL=$(sha256sum "$DL/$ASSET" | awk '{print $1}')
           [ "$EXPECTED" = "$ACTUAL" ] || { echo "::error::sha256 mismatch: $EXPECTED vs $ACTUAL"; exit 1; }
+          # The sidecar only proves the archive matches its own checksum. This proves it is
+          # the archive this run built.
+          if [ "$ACTUAL" != "$BUILT_SHA256" ]; then
+            echo "::error::the $ASSET on release $TAG has sha256 $ACTUAL, but this run's build job produced $BUILT_SHA256 - the release carries someone else's artifacts"
+            exit 1
+          fi
 
           for f in "react-android-$BASE-debug.aar" "react-android-$BASE-release.aar" \
                    "react-android-$BASE.module" "react-android-$BASE.pom"; do
