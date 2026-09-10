@@ -48,6 +48,7 @@ jobs:
         id: v
         env:
           VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-scatterlab\.[0-9]+$ ]]; then
@@ -67,9 +68,19 @@ jobs:
             exit 1
           fi
 
+          # Unlike VERSION_NAME above, this is inputs.dry_run-conditional: iOS warns in both
+          # cases because its tarball is named per version, which is itself a signal that
+          # the artifact matches. Android has no such signal - the coordinate is identical
+          # across all fork versions (see "좌표 충돌" in android-prebuilt.md) - so a real
+          # release build must fail closed here, not just warn.
           COMMITTED=$(node -p "require('./packages/react-native/package.json').version")
           if [ "$COMMITTED" != "$VERSION" ]; then
-            echo "::warning::packages/react-native/package.json is at $COMMITTED but these artifacts are for $VERSION. They must match the version consumers install, or the URL the consumer script builds will not resolve."
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::packages/react-native/package.json is at $COMMITTED but these artifacts are for $VERSION. They must match the version consumers install, or the URL the consumer script builds will not resolve."
+            else
+              echo "::error::packages/react-native/package.json is at $COMMITTED but these artifacts are for $VERSION. A real release must be built from the checkout that matches $VERSION, or the consumer downloads this tag and gets the wrong binaries."
+              exit 1
+            fi
           fi
 
       - uses: actions/setup-java@v5
@@ -200,25 +211,29 @@ jobs:
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             # A published release is already visible to consumers - re-running into it
-            # would upload assets nobody re-verifies. Only a draft left by an earlier,
-            # not-yet-verified run of this workflow is safe to reuse.
+            # would upload assets nobody re-verifies, and its assets must never be
+            # clobbered (a consumer with a warm cache cannot detect a replaced asset and
+            # would keep the old AAR forever). Cut a new -scatterlab.N instead.
             IS_DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft)
             if [ "$IS_DRAFT" != "true" ]; then
               echo "::error::release $TAG already exists and is published. Re-running this workflow would upload into a release consumers can already see - cut a new -scatterlab.N instead."
               exit 1
             fi
-          else
-            # Draft: invisible to anyone without push access, and its asset URLs 404 for
-            # everyone else. A consumer that races this window gets a 404 and aborts - the
-            # correct fail-closed outcome until the verify job promotes it below.
-            gh release create "$TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Android prebuilt for $VERSION" \
-              --notes "com.facebook.react Maven artifacts built from this fork for @scatterlab/react-native@$VERSION. Consumed by scripts/android/scatterlab-prebuilt-maven.gradle." \
-              --prerelease --draft
+            # A draft, unlike a published release, has never been consumer-visible - its
+            # asset URLs 404 for anyone without push access - so replacing it is safe. A
+            # re-run lands here when an earlier run uploaded assets and then `verify`
+            # failed. Delete and recreate rather than reusing it in place, so no asset from
+            # that partial earlier run (e.g. only the debug AAR made it up) can survive.
+            gh release delete "$TAG" --yes
           fi
-          # No --clobber: a consumer with a warm cache cannot detect a replaced asset and
-          # would keep the old AAR forever. Publish a new -scatterlab.N instead.
+          # Draft: invisible to anyone without push access, and its asset URLs 404 for
+          # everyone else. A consumer that races this window gets a 404 and aborts - the
+          # correct fail-closed outcome until the verify job promotes it below.
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Android prebuilt for $VERSION" \
+            --notes "com.facebook.react Maven artifacts built from this fork for @scatterlab/react-native@$VERSION. Consumed by scripts/android/scatterlab-prebuilt-maven.gradle." \
+            --prerelease --draft
           gh release upload "$TAG" "$DIR"/*
 
       - name: Save the Android ccache

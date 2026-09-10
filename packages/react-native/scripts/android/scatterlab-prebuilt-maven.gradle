@@ -28,7 +28,11 @@ if (!(version ==~ /^\d+\.\d+\.\d+-scatterlab\.\d+$/)) {
 
 def tag = "prebuilt-android-${version}"
 def asset = "react-native-android-maven-${version}.tar.gz"
-def assetUrl = "https://github.com/scatterlab/react-native/releases/download/${tag}/${asset}"
+// SCATTERLAB_PREBUILT_BASE_URL exists only for the cold-cache case of
+// android-prebuilt-consumer-test.sh, to point the download at a local fixture server
+// instead of the real release. Unset (the production path), it is exactly the real host.
+def baseUrl = System.getenv('SCATTERLAB_PREBUILT_BASE_URL') ?: 'https://github.com/scatterlab/react-native/releases/download'
+def assetUrl = "${baseUrl}/${tag}/${asset}"
 
 // Scoped by fork version on purpose. VERSION_NAME is pinned to the base, so every fork
 // version publishes the SAME coordinate - sharing one repo root would let Gradle keep

@@ -14,7 +14,14 @@ WORK=$(mktemp -d)
 WORK=$(cd "$WORK" && pwd -P)  # resolve symlinks (e.g. macOS /var -> /private/var): Gradle
                               # canonicalizes GRADLE_USER_HOME, so an unresolved $WORK would
                               # make case C compare against a path Gradle never reports.
-trap 'rm -rf "$WORK"' EXIT
+httpd_pid=""
+cleanup() {
+  if [ -n "$httpd_pid" ]; then
+    kill "$httpd_pid" 2>/dev/null || true
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 failures=0
 
 # Lays out <root>/rn/{package.json,scripts/android/<script>} plus a consumer project whose
@@ -48,7 +55,7 @@ run_case() {
   local dir=$1
   shift
   set +e
-  LAST_OUTPUT=$( cd "$dir/app" && GRADLE_USER_HOME="$dir/gradlehome" "$GRADLE" --offline -q probe "$@" 2>&1 )
+  LAST_OUTPUT=$( cd "$dir/app" && GRADLE_USER_HOME="$dir/gradlehome" SCATTERLAB_PREBUILT_BASE_URL="${SCATTERLAB_PREBUILT_BASE_URL:-}" "$GRADLE" --offline -q probe "$@" 2>&1 )
   LAST_EXIT=$?
   set -e
 }
@@ -108,6 +115,63 @@ run_case "$dir"
 check "warm cache is used" \
   "PROBE_VALUE=$dir/gradlehome/scatterlab-react-native/0.87.1-scatterlab.998/maven" \
   "$LAST_OUTPUT"
+
+# D: cold-cache success path - the one every first build on a developer machine or CI runner
+#    takes, and the one no case above covers. Serves a fixture release over a real local HTTP
+#    server via SCATTERLAB_PREBUILT_BASE_URL (consulted by the script only when set - see the
+#    comment on assetUrl there; unset, the URL is the real GitHub host), then asserts an
+#    artifact lands at the exact Maven path the producer's tar and the consumer's
+#    extract-then-rename have to agree on.
+cold_version="0.87.1-scatterlab.997"
+cold_tag="prebuilt-android-$cold_version"
+cold_asset="react-native-android-maven-$cold_version.tar.gz"
+
+# Built the same way the producer's "Pack the Maven repository" step does: the archive root
+# IS the repository root (tar -C <root> -czf ... .), so a drift there is exactly what this
+# case is meant to catch. Hand-writing the tar differently would test nothing.
+fixture_root="$WORK/fixture-src"
+mkdir -p "$fixture_root/com/facebook/react/react-android/0.87.1"
+echo fixture-pom > "$fixture_root/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
+
+fixtures_dir="$WORK/fixtures/$cold_tag"
+mkdir -p "$fixtures_dir"
+tar -C "$fixture_root" -czf "$fixtures_dir/$cold_asset" .
+( cd "$fixtures_dir" && sha256sum "$cold_asset" | awk '{print $1}' > "$cold_asset.sha256" )
+
+# -u: unbuffered stdout, or the startup line (which the loop below polls for) sits in a
+# pipe buffer indefinitely once stdout isn't a tty.
+python3 -u -m http.server 0 --directory "$WORK/fixtures" --bind 127.0.0.1 > "$WORK/httpd.log" 2>&1 &
+httpd_pid=$!
+disown "$httpd_pid" 2>/dev/null || true  # suppress bash's "Terminated" job-control notice on kill
+port=""
+for _ in $(seq 1 50); do
+  port=$(sed -n 's/.*port \([0-9][0-9]*\).*/\1/p' "$WORK/httpd.log" | head -1)
+  [ -n "$port" ] && break
+  sleep 0.1
+done
+
+if [ -z "$port" ]; then
+  echo "FAIL - cold-cache fixture server did not start"
+  cat "$WORK/httpd.log" >&2
+  failures=$((failures + 1))
+else
+  dir=$(setup_case cold-cache "$cold_version")
+  SCATTERLAB_PREBUILT_BASE_URL="http://127.0.0.1:$port" run_case "$dir"
+  check "cold cache downloads and extracts" \
+    "PROBE_VALUE=$dir/gradlehome/scatterlab-react-native/$cold_version/maven" \
+    "$LAST_OUTPUT"
+  landed="$dir/gradlehome/scatterlab-react-native/$cold_version/maven/com/facebook/react/react-android/0.87.1/react-android-0.87.1.pom"
+  if [ -f "$landed" ]; then
+    echo "ok   - cold cache lands the fixture artifact at its Maven path"
+  else
+    echo "FAIL - cold cache lands the fixture artifact at its Maven path"
+    echo "       expected: $landed"
+    failures=$((failures + 1))
+  fi
+fi
+
+kill "$httpd_pid" 2>/dev/null || true
+httpd_pid=""
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
 echo "all cases passed"
