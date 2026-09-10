@@ -41,9 +41,16 @@ EOF
   echo "$dir"
 }
 
+# Runs gradle for $dir, forwarding any extra args (e.g. -D system properties). Leaves the
+# output in $LAST_OUTPUT and the exit code in $LAST_EXIT rather than propagating a non-zero
+# exit through `set -e`, since the failure cases under test are expected to fail.
 run_case() {
   local dir=$1
-  ( cd "$dir/app" && GRADLE_USER_HOME="$dir/gradlehome" "$GRADLE" --offline -q probe 2>&1 )
+  shift
+  set +e
+  LAST_OUTPUT=$( cd "$dir/app" && GRADLE_USER_HOME="$dir/gradlehome" "$GRADLE" --offline -q probe "$@" 2>&1 )
+  LAST_EXIT=$?
+  set -e
 }
 
 check() {
@@ -58,23 +65,49 @@ check() {
   fi
 }
 
+# Like check, but also requires the build to have exited non-zero - for cases whose whole
+# point is that the build must not silently succeed.
+check_fails() {
+  local label=$1 expected=$2
+  if [[ "$LAST_EXIT" -eq 0 ]]; then
+    echo "FAIL - $label"
+    echo "       expected a non-zero exit, got 0"
+    failures=$((failures + 1))
+    return
+  fi
+  check "$label" "$expected" "$LAST_OUTPUT"
+}
+
 # A: an upstream version must be a no-op, so this script can ship in a package that is
 #    installed straight from npmjs without a fork suffix.
 dir=$(setup_case upstream "0.87.1")
-check "upstream version leaves the property unset" "PROBE_SET=false" "$(run_case "$dir" || true)"
+run_case "$dir"
+check "upstream version leaves the property unset" "PROBE_SET=false" "$LAST_OUTPUT"
 
 # B: a fork version with no release must stop the build. Falling through to Maven Central
-#    would ship the unpatched upstream AAR with no error.
-dir=$(setup_case missing "0.87.1-scatterlab.999")
-check "missing release aborts" "prebuilt-android-0.87.1-scatterlab.999" "$(run_case "$dir" || true)"
+#    would ship the unpatched upstream AAR with no error. The abort message is asserted on
+#    "Expected: <assetUrl>" text, which the script's fail() always includes regardless of
+#    whether the download got as far as an HTTP status (a real 404) or never resolved a host
+#    at all (no network) - both must fail the build the same way, so this is run twice: once
+#    hitting the real (nonexistent) GitHub release, once with DNS forced unreachable via a
+#    proxy host that can never resolve (RFC 2606 reserves the .invalid TLD for exactly this).
+missing_dir=$(setup_case missing "0.87.1-scatterlab.999")
+run_case "$missing_dir"
+check_fails "missing release aborts (real network)" "prebuilt-android-0.87.1-scatterlab.999"
+
+missing_dir_nodns=$(setup_case missing-nodns "0.87.1-scatterlab.999")
+run_case "$missing_dir_nodns" \
+  -Dhttps.proxyHost=react-native-prebuilt-test.invalid -Dhttps.proxyPort=1
+check_fails "missing release aborts (no network / DNS broken)" "prebuilt-android-0.87.1-scatterlab.999"
 
 # C: a warm cache must be used as-is, with no network. --offline makes any download attempt
 #    fail loudly instead of quietly succeeding on a machine that happens to be online.
 dir=$(setup_case cached "0.87.1-scatterlab.998")
 mkdir -p "$dir/gradlehome/scatterlab-react-native/0.87.1-scatterlab.998/maven"
+run_case "$dir"
 check "warm cache is used" \
   "PROBE_VALUE=$dir/gradlehome/scatterlab-react-native/0.87.1-scatterlab.998/maven" \
-  "$(run_case "$dir" || true)"
+  "$LAST_OUTPUT"
 
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
 echo "all cases passed"

@@ -49,10 +49,22 @@ def download = { String url, File target ->
   connection.instanceFollowRedirects = true
   connection.connectTimeout = 30_000
   connection.readTimeout = 300_000
-  if (connection.responseCode != 200) {
-    fail("${url} returned HTTP ${connection.responseCode}.")
+  try {
+    def code = connection.responseCode
+    if (code != 200) {
+      fail("${url} returned HTTP ${code}.")
+    }
+    target.withOutputStream { out -> connection.inputStream.withStream { input -> out << input } }
+  } catch (GradleException e) {
+    // fail() already threw the right message (e.g. a non-200 status, or a sha256
+    // mismatch further down) - do not relabel it as a network error.
+    throw e
+  } catch (Exception e) {
+    // Anything before a status even exists - DNS failure, connect timeout, TLS error -
+    // must still go through fail() so the consumer gets the same guidance instead of a
+    // raw stack trace.
+    fail("${url} failed: ${e.class.simpleName}: ${e.message}")
   }
-  target.withOutputStream { out -> connection.inputStream.withStream { input -> out << input } }
 }
 
 def sha256 = { File file ->
