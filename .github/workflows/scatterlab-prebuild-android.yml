@@ -118,60 +118,50 @@ jobs:
 
   build:
     needs: prepare
-    runs-on: arc-messenger-dev
-    # The runner image carries no Android SDK, NDK or CMake, and ReactAndroid needs all
-    # three. Upstream builds these same artifacts inside this image (`publish-npm.yml`'s
-    # `build_android`), so it is the toolchain the sources expect. `arc-messenger-dev` is a
-    # dind scale set, so it can run a job container.
+    # zeta 의 네이티브 Android 출고가 도는 러너다 (`zeta-frontend` 의 `deploy-native.yml`).
+    # SDK·NDK·CMake 가 이미 깔려 있고, 조직 TLS 프록시도 이미 신뢰한다.
     #
-    # Pinned by digest, not `:latest`: this workflow exists to prove the AAR was built from
-    # the sources its version claims, and a toolchain that moves underneath makes two builds
-    # of the same commit differ. `VERSION_NAME` is pinned to the upstream base, so the NDK
-    # and CMake this needs are fixed too - re-pin when the base moves, not before.
-    # sha256:24ca7ab5... is `v21.0` (2026-06-19), which `:latest` pointed at.
-    container:
-      image: reactnativecommunity/react-native-android@sha256:24ca7ab5a70ec0b78a81bdc5eeea5924c2531531d53971b6f2321aff08446c36
-      env:
-        TERM: 'dumb'
-        # Gradle mis-decompresses tar.gz inside containers under some locales.
-        # https://github.com/gradle/gradle/issues/23391#issuecomment-1878979127
-        LC_ALL: C.UTF8
-        GRADLE_OPTS: '-Dorg.gradle.daemon=false'
-      # The image's git could not verify github.com ("CAfile: none") while the host runner
-      # reaches the same URL fine - the trust the host has is not inside the container.
-      # Mounting the host's bundle covers both causes: an image without ca-certificates,
-      # and an org TLS proxy whose CA only the host trusts.
-      volumes:
-        - /etc/ssl/certs:/etc/ssl/certs:ro
+    # 상류는 이 아티팩트를 `reactnativecommunity/react-native-android` 컨테이너에서 빌드하고
+    # 그게 소스가 전제하는 툴체인이지만, 그 길은 막혔다: dind ARC 러너의 잡 컨테이너 안에서는
+    # git 이 github.com 을 검증하지 못한다(조직이 자체 CA 로 TLS 를 종단한다). `volumes:` 로는
+    # 못 고친다 — dind 는 **docker 데몬 쪽**(사이드카) 파일시스템을 마운트하지, 그 CA 를 가진
+    # 러너의 것을 마운트하지 않는다. 컨테이너 안에서 맞추려면 git·node·JVM 트러스트스토어를
+    # 따로 손봐야 한다. 이미 동작하는 러너를 쓰는 편이 낫다.
+    runs-on: [self-hosted, zeta-app-builder]
+    env:
+      # deploy-native.yml 과 같은 값. 두 러너(gaudi·zeta-app-builder)의 유저명이 모두
+      # scatterlab 이라 절대 경로가 그대로 유효하다.
+      ANDROID_HOME: /Users/scatterlab/Library/Android/sdk
+      ANDROID_SDK_ROOT: /Users/scatterlab/Library/Android/sdk
     permissions:
       contents: write
     outputs:
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
-      # Printed before the first network step so a TLS failure carries its evidence instead
-      # of costing another run to diagnose. Never fails the job.
-      - name: Diagnose TLS trust inside the container
-        continue-on-error: true
-        run: |
-          echo "certs in /etc/ssl/certs: $(find /etc/ssl/certs -type f -o -type l 2>/dev/null | wc -l)"
-          echo "SSL_CERT_FILE=${SSL_CERT_FILE:-unset} GIT_SSL_CAINFO=${GIT_SSL_CAINFO:-unset}"
-          git config --get http.sslCAInfo || echo "http.sslCAInfo unset"
-          echo "github.com -> $(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 30 https://github.com 2>&1 || true)"
-          echo "repo1.maven.org -> $(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 30 https://repo1.maven.org/maven2/ 2>&1 || true)"
-
       - uses: actions/checkout@v4
 
       - name: Setup git safe folders
         run: git config --global --add safe.directory '*'
 
+      # 맥 러너는 matrix 잡들이 $HOME 을 공유하고 yarn 1 전역 캐시는 동시성 안전하지 않다
+      # (iOS prebuild 에서 두 번 밟았다). setup-node 보다 먼저 export 해야 그 안의 중첩
+      # yarn 호출까지 덮인다.
+      - name: Isolate the yarn cache
+        run: echo "YARN_CACHE_FOLDER=$RUNNER_TEMP/yarn-cache" >> "$GITHUB_ENV"
+
       - uses: ./.github/actions/setup-node
       - uses: ./.github/actions/yarn-install
 
       # Without a warm ccache every run is a full C++ rebuild of ReactCommon.
+      # CCACHE_DIR is set explicitly: ccache's default differs per platform, and the cache
+      # action needs the same path the compiler actually writes to.
+      - name: Point ccache at a known directory
+        run: echo "CCACHE_DIR=$RUNNER_TEMP/ccache" >> "$GITHUB_ENV"
+
       - name: Restore the Android ccache
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ runner.temp }}/ccache
           key: scatterlab-ccache-android-${{ hashFiles('packages/react-native/ReactAndroid/**/*.cpp', 'packages/react-native/ReactAndroid/**/*.h', 'packages/react-native/ReactCommon/**/*.cpp', 'packages/react-native/ReactAndroid/**/CMakeLists.txt', 'packages/react-native/ReactCommon/**/CMakeLists.txt') }}
           restore-keys: scatterlab-ccache-android-
 
@@ -340,7 +330,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ runner.temp }}/ccache
           key: scatterlab-ccache-android-${{ hashFiles('packages/react-native/ReactAndroid/**/*.cpp', 'packages/react-native/ReactAndroid/**/*.h', 'packages/react-native/ReactCommon/**/*.cpp', 'packages/react-native/ReactAndroid/**/CMakeLists.txt', 'packages/react-native/ReactCommon/**/CMakeLists.txt') }}
 
       # A shared runner: the build products are several GB.
