@@ -132,6 +132,14 @@ jobs:
       - uses: ./.github/actions/setup-node
       - uses: ./.github/actions/yarn-install
 
+      # The runner image ships no JDK, and `./gradlew` below needs one. Same version and
+      # distribution as the `prepare` job so both halves of this workflow build against
+      # the same toolchain.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       # Without a warm ccache every run is a full C++ rebuild of ReactCommon.
       - name: Restore the Android ccache
         uses: actions/cache/restore@v4
