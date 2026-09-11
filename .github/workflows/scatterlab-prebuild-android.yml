@@ -167,6 +167,38 @@ jobs:
 
       - uses: ./.github/actions/yarn-install
 
+      # zeta's app build links the prebuilt react-android AAR and never compiles
+      # ReactCommon, so nothing has ever needed these on this runner - the first real run
+      # died with `[CXX1300] CMake '3.30.5' was not found in SDK, PATH, or by cmake.dir
+      # property.` (run 34554813265). Installing here rather than by hand because the
+      # label carries several machines (runs landed on `actions-runner-a` and `runner-c`),
+      # so a manual install only fixes whichever one you were looking at.
+      #
+      # Versions must match packages/react-native/gradle/libs.versions.toml (ndkVersion)
+      # and ReactAndroid/build.gradle.kts (cmakeVersion) - upstream builds against that
+      # pair. sdkmanager is idempotent, so this is a no-op once a machine is warm.
+      - name: Ensure the CMake and NDK ReactAndroid builds against
+        run: |
+          set -euo pipefail
+          SDKMANAGER=""
+          for candidate in "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager \
+                           "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager \
+                           "$ANDROID_HOME"/tools/bin/sdkmanager; do
+            if [ -x "$candidate" ]; then SDKMANAGER="$candidate"; break; fi
+          done
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::No sdkmanager under $ANDROID_HOME. This runner cannot install the CMake/NDK ReactAndroid needs."
+            exit 1
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+          yes 2>/dev/null | "$SDKMANAGER" --install 'cmake;3.30.5' 'ndk;27.1.12297006'
+          # Prove it landed rather than trusting sdkmanager's exit code, which stays 0 for
+          # a package it silently declined to install.
+          for required in "$ANDROID_HOME/cmake/3.30.5" "$ANDROID_HOME/ndk/27.1.12297006"; do
+            [ -d "$required" ] || { echo "::error::$required is still missing after sdkmanager ran"; exit 1; }
+          done
+          echo "cmake 3.30.5 and ndk 27.1.12297006 present"
+
       # Without a warm ccache every run is a full C++ rebuild of ReactCommon.
       # CCACHE_DIR is set explicitly: ccache's default differs per platform, and the cache
       # action needs the same path the compiler actually writes to.
