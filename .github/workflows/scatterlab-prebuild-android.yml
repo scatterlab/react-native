@@ -194,10 +194,15 @@ jobs:
 
           # `yes | sdkmanager` cannot be used under `pipefail`: when sdkmanager exits first,
           # `yes` dies of SIGPIPE (141) and pipefail makes that the pipeline's status, so a
-          # successful install still fails the step. Accept licences in their own pipeline
-          # with pipefail off, then install without a pipe at all.
+          # successful install still fails the step. With pipefail off the pipeline reports
+          # sdkmanager's own status instead, so SIGPIPE is ignored and a real licence
+          # failure is still caught - no `|| true`, which would swallow both.
           set +o pipefail
-          yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          if ! yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null; then
+            set -o pipefail
+            echo "::error::sdkmanager --licenses failed; cmake/ndk cannot be installed"
+            exit 1
+          fi
           set -o pipefail
 
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install 'cmake;3.30.5' 'ndk;27.1.12297006'
