@@ -64,7 +64,7 @@ env ORG_GRADLE_PROJECT_react.internal.useHermesStable=true \
 - `isSnapshot`을 켜지 않는다. 켜면 버전에 `-SNAPSHOT`이 붙어 좌표가 어긋난다.
 - ABI는 기본값(`armeabi-v7a,arm64-v8a,x86,x86_64`)을 그대로 둔다. 소비자의 `reactNativeArchitectures`와 같아야 한다.
 - Debug·Release 두 variant는 `components.default` 멀티 variant 퍼블리시로 한 번에 나온다(`publish.gradle`).
-- 빌드는 상류와 같은 `reactnativecommunity/react-native-android` 컨테이너에서 돈다 — 러너 이미지에 Android SDK·NDK·CMake가 없다. **digest로 고정**한다: 툴체인이 밑에서 움직이면 같은 커밋의 두 빌드가 달라지고, 이 워크플로가 증명하려는 것이 바로 그 동일성이다. base가 고정이면 요구 툴체인도 고정이므로 **base를 올릴 때만** 다시 핀한다.
+- 빌드는 **zeta 의 네이티브 Android 출고가 도는 러너**(`[self-hosted, zeta-app-builder]`)에서 돈다 — SDK·NDK·CMake 가 이미 있고 조직 TLS 프록시도 이미 신뢰한다. 상류처럼 `reactnativecommunity/react-native-android` 컨테이너를 쓰는 길은 막혀 있다: dind ARC 러너의 잡 컨테이너 안에서는 git 이 github.com 을 검증하지 못하고(조직이 자체 CA로 TLS를 종단한다), `volumes:` 로도 못 고친다 — dind는 **docker 데몬 쪽** 파일시스템을 마운트하지 그 CA를 가진 러너의 것을 마운트하지 않는다. `ANDROID_HOME` 은 `deploy-native.yml` 과 같은 값을 쓴다.
 - ccache를 러너에 유지한다. 없으면 매 실행이 전체 C++ 재컴파일이다.
 - 빌드 산출물은 수 GB다. `if: always()`로 정리한다.
 
