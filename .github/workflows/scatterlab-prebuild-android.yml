@@ -149,7 +149,22 @@ jobs:
       - name: Isolate the yarn cache
         run: echo "YARN_CACHE_FOLDER=$RUNNER_TEMP/yarn-cache" >> "$GITHUB_ENV"
 
-      - uses: ./.github/actions/setup-node
+      # Not `./.github/actions/setup-node`: that composite forces `cache: yarn`, and
+      # setup-node resolves that cache key by running `yarn` before yarn exists. On this
+      # runner yarn comes from a corepack shim bound to the node install in the per-runner
+      # tool cache, so a runner that has just downloaded this node version has no shim and
+      # the step dies with "Unable to locate executable file: yarn". `deploy-native.yml`
+      # in zeta-frontend hit the same thing and documents it; the iOS prebuild here avoids
+      # it the same way.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+
+      # Idempotent. The actual yarn version follows the root package.json's
+      # packageManager (yarn@1.22.22).
+      - name: Enable corepack
+        run: corepack enable
+
       - uses: ./.github/actions/yarn-install
 
       # Without a warm ccache every run is a full C++ rebuild of ReactCommon.
