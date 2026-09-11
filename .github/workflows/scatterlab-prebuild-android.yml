@@ -137,11 +137,28 @@ jobs:
         # https://github.com/gradle/gradle/issues/23391#issuecomment-1878979127
         LC_ALL: C.UTF8
         GRADLE_OPTS: '-Dorg.gradle.daemon=false'
+      # The image's git could not verify github.com ("CAfile: none") while the host runner
+      # reaches the same URL fine - the trust the host has is not inside the container.
+      # Mounting the host's bundle covers both causes: an image without ca-certificates,
+      # and an org TLS proxy whose CA only the host trusts.
+      volumes:
+        - /etc/ssl/certs:/etc/ssl/certs:ro
     permissions:
       contents: write
     outputs:
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
+      # Printed before the first network step so a TLS failure carries its evidence instead
+      # of costing another run to diagnose. Never fails the job.
+      - name: Diagnose TLS trust inside the container
+        continue-on-error: true
+        run: |
+          echo "certs in /etc/ssl/certs: $(find /etc/ssl/certs -type f -o -type l 2>/dev/null | wc -l)"
+          echo "SSL_CERT_FILE=${SSL_CERT_FILE:-unset} GIT_SSL_CAINFO=${GIT_SSL_CAINFO:-unset}"
+          git config --get http.sslCAInfo || echo "http.sslCAInfo unset"
+          echo "github.com -> $(curl -sS -o /dev/null -w '%{http_code}' https://github.com 2>&1 || true)"
+          echo "repo1.maven.org -> $(curl -sS -o /dev/null -w '%{http_code}' https://repo1.maven.org/maven2/ 2>&1 || true)"
+
       - uses: actions/checkout@v4
 
       - name: Setup git safe folders
