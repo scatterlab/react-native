@@ -44,7 +44,9 @@ zeta에서 실측한 저장소 목록:
 [9] MavenRepo2  https://repo.maven.apache.org/maven2/   ← RNGP가 추가, excludeGroup 있음
 ```
 
-그래서 **소비자가 자기 저장소 선언에서 그 모듈을 제외해야 한다.** zeta의 `packages/app/android/app/build.gradle.kts`:
+그래서 **소비자가 자기 저장소 선언에서 그 모듈을 제외해야 한다.** 규칙은 "`mavenCentral()` 을 제외한다" 가 아니라 **소비자가 선언한 저장소 중 이 좌표를 서빙할 수 있는 것 전부**다 — 콘텐츠 필터는 그것이 붙은 저장소에만 적용되므로, 사설 미러나 `mavenLocal()` 을 앞에 하나 더 두면 그것이 먼저 응답한다.
+
+zeta는 `google()`·`mavenCentral()` 둘뿐이라 `packages/app/android/app/build.gradle.kts` 가 이렇게 된다(뒤따르는 광고 SDK 저장소들은 이 좌표를 서빙하지 않는다):
 
 ```kotlin
 val forkOnly: (org.gradle.api.artifacts.repositories.MavenArtifactRepository) -> Unit = {
@@ -67,20 +69,45 @@ mavenCentral(forkOnly)
 배선이 빠져도 **빌드는 성공하고 경고도 없다.** 아티팩트는 정확하고, 소비자만 그것을 쓰지 않는다. 이 레포의 검사는 전부 우리가 만든 AAR을 보므로 — 스모크, tarball 게이트, `verify_symbol` — 소비자 쪽 결함을 하나도 잡지 못한다. 판정 기준은 **소비자가 실제로 해석한 파일의 심볼 개수**다:
 
 ```groovy
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
 // 소비자 프로젝트에 init script 로 주입
 def cfg = project.configurations.getByName('<variant>RuntimeClasspath')
-cfg.incoming.artifactView { it.lenient = true }.artifacts.artifacts.each { a ->
-  if (a.variant.owner.toString().contains('react-android')) println "${a.variant.owner} :: ${a.file}"
+def hits = cfg.incoming.artifactView { view ->
+  view.componentFilter { id ->
+    id instanceof ModuleComponentIdentifier &&
+      id.group == 'com.facebook.react' && id.module == 'react-android'
+  }
+}.artifacts.artifacts
+if (hits.size() != 1) {
+  throw new GradleException("expected exactly 1 react-android artifact, got ${hits.size()}")
 }
+println "RESOLVED ${hits.first().variant.owner} :: ${hits.first().file}"
 ```
+
+`lenient = true` 를 쓰지 않는 것과 개수를 단언하는 것이 둘 다 필요하다. lenient 는 해석에 실패한 아티팩트를 **조용히 결과에서 빼므로**, 빈 결과가 "업스트림이 안 실렸다" 인지 "해석이 깨졌다" 인지 구별되지 않는다. 문자열 `contains` 대신 `ModuleComponentIdentifier` 의 `group`·`module` 로 맞추는 것도 같은 이유다.
 
 그 AAR의 `classes.jar` 를 풀어 그 버전이 도입한 식별자를 `javap -p` 로 센다. 0이면 업스트림이 실린 것이다. 모든 fork 버전이 같은 좌표(`com.facebook.react:react-android:0.87.1`)를 쓰므로 파일 경로나 존재 여부로는 판별할 수 없다.
 
+**Kotlin 톱레벨 함수는 파일 파사드 클래스에 들어간다.** `0.87.1-scatterlab.4` 의 `visibleTextEnd` 는 `TextDecorationStyle.class` 가 아니라 `TextDecorationStyleKt.class` 에 있다. class 파일 하나만 보면 패치가 들어 있어도 0을 센다.
+
 **검증은 반드시 실제 소비자에서 한다.** 저장소가 미리 선언돼 있지 않은 프로브 프로젝트는 이 결함을 재현하지 못한다 — 그런 프로젝트에서는 RNGP가 추가한 저장소가 유일하므로 항상 통과한다.
+
+### `repositoriesMode` — 기본값에서만 성립한다
+
+RNGP는 저장소를 **프로젝트 수준**(app 프로젝트의 `afterEvaluate`)에 추가한다. `react.internal.mavenLocalRepo` 경로든 아니든 마찬가지다. 따라서 소비자의 `dependencyResolutionManagement.repositoriesMode` 가 기본값이 아니면 RNGP 메커니즘 자체가 성립하지 않는다.
+
+| 모드 | RNGP 기본 경로 | 우리 배선 | 결과 |
+| --- | --- | --- | --- |
+| `PREFER_PROJECT` (기본) | 동작 | 동작 | 지원 대상. zeta가 여기다 |
+| `PREFER_SETTINGS` | 프로젝트 저장소가 무시된다 | 무시된다 | settings의 Maven Central이 업스트림 AAR을 **조용히** 서빙한다 |
+| `FAIL_ON_PROJECT_REPOS` | 구성 오류 | 구성 오류 | 빌드가 죽는다 |
+
+zeta는 `settings.gradle.kts` 에 `dependencyResolutionManagement` 블록이 없어 기본값이고, 저장소를 `app/build.gradle.kts` 의 프로젝트 수준에 선언한다. 다른 모드를 쓰는 소비자가 생기면 배선을 settings 수준(`dependencyResolutionManagement.repositories`)으로 옮겨야 한다.
 
 ### 알려진 한계
 
-fork 쪽 스크립트가 `exclusiveContent` 로 이 모듈을 우리 저장소에 잠그면 순서에 의존하지 않으므로 소비자 배선 없이도 성립한다. 다만 `exclusiveContent` 는 프로젝트 저장소를 추가하므로 `repositoriesMode = FAIL_ON_PROJECT_REPOS` 를 쓰는 소비자를 깨뜨린다. 도입하려면 그 경우를 먼저 다뤄야 하고, 위 harness로 실제 소비자에서 양·음 양쪽을 재현한 뒤여야 한다.
+fork 쪽 스크립트가 `exclusiveContent` 로 이 모듈을 우리 저장소에 잠그면 순서에 의존하지 않으므로 소비자 배선 없이도 성립한다. 다만 그것을 `project.repositories` 에 등록하면 위 표의 두 비기본 모드에서 똑같이 무시되거나 깨진다. 스크립트는 settings 평가 중에 돌므로 `dependencyResolutionManagement.repositories` 에 등록하는 편이 옳고, 그러려면 세 모드 fixture와 위 harness로 실제 소비자에서 양·음 양쪽을 재현한 뒤여야 한다.
 
 ## 좌표 충돌 — 이 설계의 핵심 함정
 
