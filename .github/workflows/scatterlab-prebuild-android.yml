@@ -191,11 +191,31 @@ jobs:
             exit 1
           fi
           echo "sdkmanager: $SDKMANAGER"
-          yes 2>/dev/null | "$SDKMANAGER" --install 'cmake;3.30.5' 'ndk;27.1.12297006'
+
+          # `yes | sdkmanager` cannot be used under `pipefail`: when sdkmanager exits first,
+          # `yes` dies of SIGPIPE (141) and pipefail makes that the pipeline's status, so a
+          # successful install still fails the step. With pipefail off the pipeline reports
+          # sdkmanager's own status instead, so SIGPIPE is ignored and a real licence
+          # failure is still caught - no `|| true`, which would swallow both.
+          set +o pipefail
+          if ! yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null; then
+            set -o pipefail
+            echo "::error::sdkmanager --licenses failed; cmake/ndk cannot be installed"
+            exit 1
+          fi
+          set -o pipefail
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install 'cmake;3.30.5' 'ndk;27.1.12297006'
+
           # Prove it landed rather than trusting sdkmanager's exit code, which stays 0 for
           # a package it silently declined to install.
           for required in "$ANDROID_HOME/cmake/3.30.5" "$ANDROID_HOME/ndk/27.1.12297006"; do
-            [ -d "$required" ] || { echo "::error::$required is still missing after sdkmanager ran"; exit 1; }
+            if [ ! -d "$required" ]; then
+              echo "::error::$required is still missing after sdkmanager ran"
+              echo "cmake dirs:"; ls -1 "$ANDROID_HOME/cmake" 2>/dev/null || echo "  (none)"
+              echo "ndk dirs:";   ls -1 "$ANDROID_HOME/ndk" 2>/dev/null || echo "  (none)"
+              exit 1
+            fi
           done
           echo "cmake 3.30.5 and ndk 27.1.12297006 present"
 
