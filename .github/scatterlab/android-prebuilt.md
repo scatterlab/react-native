@@ -65,6 +65,7 @@ env ORG_GRADLE_PROJECT_react.internal.useHermesStable=true \
 - ABI는 기본값(`armeabi-v7a,arm64-v8a,x86,x86_64`)을 그대로 둔다. 소비자의 `reactNativeArchitectures`와 같아야 한다.
 - Debug·Release 두 variant는 `components.default` 멀티 variant 퍼블리시로 한 번에 나온다(`publish.gradle`).
 - 빌드는 **zeta 의 네이티브 Android 출고가 도는 러너**(`[self-hosted, zeta-app-builder]`)에서 돈다 — SDK·NDK·CMake 가 이미 있고 조직 TLS 프록시도 이미 신뢰한다. 상류처럼 `reactnativecommunity/react-native-android` 컨테이너를 쓰는 길은 막혀 있다: dind ARC 러너의 잡 컨테이너 안에서는 git 이 github.com 을 검증하지 못하고(조직이 자체 CA로 TLS를 종단한다), `volumes:` 로도 못 고친다 — dind는 **docker 데몬 쪽** 파일시스템을 마운트하지 그 CA를 가진 러너의 것을 마운트하지 않는다. `ANDROID_HOME` 은 `deploy-native.yml` 과 같은 값을 쓴다.
+- 러너의 Android SDK에 `cmake;3.30.5` 와 `ndk;27.1.12297006` 이 있어야 한다. zeta 앱 빌드는 prebuilt AAR을 링크할 뿐 ReactCommon을 컴파일하지 않아 이 둘을 쓸 일이 없었다. 워크플로가 `sdkmanager` 로 직접 설치하고 설치 여부를 디렉터리 존재로 확인한다 — 라벨 뒤에 머신이 여러 대라 손으로 깔면 한 대만 고쳐진다. 버전은 `libs.versions.toml`(ndkVersion)·`ReactAndroid/build.gradle.kts`(cmakeVersion)를 따르며 **base를 올릴 때 함께 맞춘다**.
 - ccache를 러너에 유지한다. 없으면 매 실행이 전체 C++ 재컴파일이다.
 - 빌드 산출물은 수 GB다. `if: always()`로 정리한다.
 
