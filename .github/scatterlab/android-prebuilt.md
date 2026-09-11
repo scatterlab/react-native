@@ -56,6 +56,12 @@ mavenCentral(forkOnly)
 
 그룹 전체가 아니라 모듈 하나만 제외하는 이유는, RNGP가 `react-native` 를 `react-android` 로, `hermes-android` 를 `com.facebook.hermes` 그룹으로 치환해서 이 그룹에서 실제로 해석되는 좌표가 `react-android` 뿐이고, 그룹을 통째로 막으면 우리가 싣지 않는 것에서 깨지기 때문이다.
 
+### 제외 범위는 릴리스가 싣는 좌표와 같이 간다
+
+`publishAllToMavenTempLocal` 산출물은 현재 `com.facebook.react:react-android` 하나다. Hermes는 `com.facebook.hermes:hermes-android:<hermesVersion>` 으로 **다른 그룹·다른 버전**에서 해석되고(`DependencyUtils.kt` 의 `getDependencySubstitutions`) 우리는 그걸 싣지 않으므로, 소비자가 그것까지 제외하면 아무 저장소도 응답하지 못해 빌드가 깨진다.
+
+`ReactAndroid` 의 C++ 수정은 `react-android` AAR의 `jniLibs` 로 들어가므로 이미 덮인다. 덮이지 않는 것은 **Hermes 엔진 자체**를 패치하는 경우다. 그때는 릴리스에 `hermes-android` 를 추가하고 소비자 제외 목록도 같이 늘려야 한다. 두 목록은 항상 같이 움직인다 — 한쪽만 늘리면 빌드가 깨지고, 다른 쪽만 늘리면 조용히 업스트림이 실린다.
+
 ### 이 실패는 조용하다
 
 배선이 빠져도 **빌드는 성공하고 경고도 없다.** 아티팩트는 정확하고, 소비자만 그것을 쓰지 않는다. 이 레포의 검사는 전부 우리가 만든 AAR을 보므로 — 스모크, tarball 게이트, `verify_symbol` — 소비자 쪽 결함을 하나도 잡지 못한다. 판정 기준은 **소비자가 실제로 해석한 파일의 심볼 개수**다:
