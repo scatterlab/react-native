@@ -119,6 +119,24 @@ jobs:
   build:
     needs: prepare
     runs-on: arc-messenger-dev
+    # The runner image carries no Android SDK, NDK or CMake, and ReactAndroid needs all
+    # three. Upstream builds these same artifacts inside this image (`publish-npm.yml`'s
+    # `build_android`), so it is the toolchain the sources expect. `arc-messenger-dev` is a
+    # dind scale set, so it can run a job container.
+    #
+    # Pinned by digest, not `:latest`: this workflow exists to prove the AAR was built from
+    # the sources its version claims, and a toolchain that moves underneath makes two builds
+    # of the same commit differ. `VERSION_NAME` is pinned to the upstream base, so the NDK
+    # and CMake this needs are fixed too - re-pin when the base moves, not before.
+    # sha256:24ca7ab5... is `v21.0` (2026-06-19), which `:latest` pointed at.
+    container:
+      image: reactnativecommunity/react-native-android@sha256:24ca7ab5a70ec0b78a81bdc5eeea5924c2531531d53971b6f2321aff08446c36
+      env:
+        TERM: 'dumb'
+        # Gradle mis-decompresses tar.gz inside containers under some locales.
+        # https://github.com/gradle/gradle/issues/23391#issuecomment-1878979127
+        LC_ALL: C.UTF8
+        GRADLE_OPTS: '-Dorg.gradle.daemon=false'
     permissions:
       contents: write
     outputs:
@@ -131,14 +149,6 @@ jobs:
 
       - uses: ./.github/actions/setup-node
       - uses: ./.github/actions/yarn-install
-
-      # The runner image ships no JDK, and `./gradlew` below needs one. Same version and
-      # distribution as the `prepare` job so both halves of this workflow build against
-      # the same toolchain.
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
 
       # Without a warm ccache every run is a full C++ rebuild of ReactCommon.
       - name: Restore the Android ccache

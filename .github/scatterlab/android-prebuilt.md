@@ -64,6 +64,7 @@ env ORG_GRADLE_PROJECT_react.internal.useHermesStable=true \
 - `isSnapshot`을 켜지 않는다. 켜면 버전에 `-SNAPSHOT`이 붙어 좌표가 어긋난다.
 - ABI는 기본값(`armeabi-v7a,arm64-v8a,x86,x86_64`)을 그대로 둔다. 소비자의 `reactNativeArchitectures`와 같아야 한다.
 - Debug·Release 두 variant는 `components.default` 멀티 variant 퍼블리시로 한 번에 나온다(`publish.gradle`).
+- 빌드는 상류와 같은 `reactnativecommunity/react-native-android` 컨테이너에서 돈다 — 러너 이미지에 Android SDK·NDK·CMake가 없다. **digest로 고정**한다: 툴체인이 밑에서 움직이면 같은 커밋의 두 빌드가 달라지고, 이 워크플로가 증명하려는 것이 바로 그 동일성이다. base가 고정이면 요구 툴체인도 고정이므로 **base를 올릴 때만** 다시 핀한다.
 - ccache를 러너에 유지한다. 없으면 매 실행이 전체 C++ 재컴파일이다.
 - 빌드 산출물은 수 GB다. `if: always()`로 정리한다.
 
