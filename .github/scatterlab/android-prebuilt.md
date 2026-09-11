@@ -31,6 +31,51 @@ configuration.resolutionStrategy.force(
 | 공개 시점 | `build`가 **draft**로 만들고, `verify`가 통과한 뒤에만 공개(`--draft=false`) | draft는 push 권한자에게만 보이고 에셋 URL이 나머지에게 404다. 미검증 릴리스가 그 창에서 노출되지 않는다 |
 | 캐시 | `~/.gradle/scatterlab-react-native/<fork-version>/maven` | 아래 "좌표 충돌" 참조 |
 
+## 저장소 순서 — 소비자도 한 가지를 해야 한다
+
+`react.internal.mavenLocalRepo` 를 세팅하면 RNGP가 Maven Central에서 `com.facebook.react` 그룹을 제외한다. **그것만으로는 부족하다.** 그 제외는 **RNGP가 추가한** 저장소에만 붙고, RNGP는 app 프로젝트의 `afterEvaluate` 에서 저장소를 추가한다(`ReactPlugin.kt:90-99`). 소비자가 자기 빌드 스크립트에 `repositories { mavenCentral() }` 을 써 두었으면 그게 목록 앞자리를 차지하고, Gradle은 저장소를 선언 순서대로 조회하므로 우리 저장소에 닿기 전에 업스트림 AAR이 나간다.
+
+zeta에서 실측한 저장소 목록:
+
+```
+[0] Google      https://dl.google.com/...
+[1] MavenRepo   https://repo.maven.apache.org/maven2/   ← 필터 없으면 여기서 나간다
+[8] maven6      file:.../scatterlab-react-native/<version>/maven/
+[9] MavenRepo2  https://repo.maven.apache.org/maven2/   ← RNGP가 추가, excludeGroup 있음
+```
+
+그래서 **소비자가 자기 저장소 선언에서 그 모듈을 제외해야 한다.** zeta의 `packages/app/android/app/build.gradle.kts`:
+
+```kotlin
+val forkOnly: (org.gradle.api.artifacts.repositories.MavenArtifactRepository) -> Unit = {
+    it.content { excludeModule("com.facebook.react", "react-android") }
+}
+google(forkOnly)
+mavenCentral(forkOnly)
+```
+
+그룹 전체가 아니라 모듈 하나만 제외하는 이유는, RNGP가 `react-native` 를 `react-android` 로, `hermes-android` 를 `com.facebook.hermes` 그룹으로 치환해서 이 그룹에서 실제로 해석되는 좌표가 `react-android` 뿐이고, 그룹을 통째로 막으면 우리가 싣지 않는 것에서 깨지기 때문이다.
+
+### 이 실패는 조용하다
+
+배선이 빠져도 **빌드는 성공하고 경고도 없다.** 아티팩트는 정확하고, 소비자만 그것을 쓰지 않는다. 이 레포의 검사는 전부 우리가 만든 AAR을 보므로 — 스모크, tarball 게이트, `verify_symbol` — 소비자 쪽 결함을 하나도 잡지 못한다. 판정 기준은 **소비자가 실제로 해석한 파일의 심볼 개수**다:
+
+```groovy
+// 소비자 프로젝트에 init script 로 주입
+def cfg = project.configurations.getByName('<variant>RuntimeClasspath')
+cfg.incoming.artifactView { it.lenient = true }.artifacts.artifacts.each { a ->
+  if (a.variant.owner.toString().contains('react-android')) println "${a.variant.owner} :: ${a.file}"
+}
+```
+
+그 AAR의 `classes.jar` 를 풀어 그 버전이 도입한 식별자를 `javap -p` 로 센다. 0이면 업스트림이 실린 것이다. 모든 fork 버전이 같은 좌표(`com.facebook.react:react-android:0.87.1`)를 쓰므로 파일 경로나 존재 여부로는 판별할 수 없다.
+
+**검증은 반드시 실제 소비자에서 한다.** 저장소가 미리 선언돼 있지 않은 프로브 프로젝트는 이 결함을 재현하지 못한다 — 그런 프로젝트에서는 RNGP가 추가한 저장소가 유일하므로 항상 통과한다.
+
+### 알려진 한계
+
+fork 쪽 스크립트가 `exclusiveContent` 로 이 모듈을 우리 저장소에 잠그면 순서에 의존하지 않으므로 소비자 배선 없이도 성립한다. 다만 `exclusiveContent` 는 프로젝트 저장소를 추가하므로 `repositoriesMode = FAIL_ON_PROJECT_REPOS` 를 쓰는 소비자를 깨뜨린다. 도입하려면 그 경우를 먼저 다뤄야 하고, 위 harness로 실제 소비자에서 양·음 양쪽을 재현한 뒤여야 한다.
+
 ## 좌표 충돌 — 이 설계의 핵심 함정
 
 `VERSION_NAME`이 base로 고정되므로 **모든 fork 버전의 AAR이 같은 좌표를 갖는다**: `com.facebook.react:react-android:0.87.1`. `-scatterlab.2`의 AAR과 `-scatterlab.3`의 AAR은 Gradle이 보기에 구별 불가능한 같은 모듈이다.
@@ -88,6 +133,8 @@ env ORG_GRADLE_PROJECT_react.internal.useHermesStable=true \
 캐시가 이미 있으면 네트워크를 타지 않으므로 `--offline` 빌드도 그대로 된다. 캐시가 없는데 네트워크가 없으면 abort한다 — 조용히 업스트림으로 떨어뜨리지 않는다.
 
 **`SCATTERLAB_PREBUILT_BASE_URL`** — 다운로드 base URL을 덮어쓰는 환경변수. fork npm 패키지에 그대로 실려 있어 모든 소비자 빌드가 이 코드를 거친다. 오직 소비자 스크립트 스모크 테스트가 로컬 fixture 서버를 가리키기 위한 시임이라, 값의 host가 루프백(`127.0.0.1`, `[::1]`, `localhost`)일 때만 적용된다. `.sha256` 사이드카도 같은 base에서 받으므로, 루프백이 아닌 값을 그냥 받아들이면 아카이브와 그걸 검증할 체크섬을 같은 곳에서 받게 돼 무결성 검사가 아무것도 증명하지 못한다 — 그래서 루프백이 아니면 실제 릴리스로 폴백하지 않고 **빌드를 중단한다.**
+
+스크립트는 `gradle.beforeProject` 에서 프로퍼티를 세팅한다. 그것만으로는 소비자가 이 AAR을 실제로 쓰게 되지 않는다 — 위 "저장소 순서" 참조.
 
 그러면 RNGP가(`DependencyUtils.kt:56-87`):
 
