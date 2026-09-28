@@ -101,7 +101,12 @@ using namespace facebook::react;
 {
   std::lock_guard<std::mutex> lock(_surfaceMutex);
 
-  if (_surfaceHandler->getStatus() != SurfaceHandler::Status::Registered || _startInFlight.exchange(true)) {
+  // Take the flag before reading the status, so a start that finished in between reads as `Running` here.
+  if (_startInFlight.exchange(true)) {
+    return;
+  }
+  if (_surfaceHandler->getStatus() != SurfaceHandler::Status::Registered) {
+    _startInFlight = false;
     return;
   }
 
