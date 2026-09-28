@@ -7,6 +7,7 @@
 
 #import "RCTFabricSurface.h"
 
+#import <atomic>
 #import <mutex>
 
 #import <React/RCTAssert.h>
@@ -42,6 +43,11 @@ using namespace facebook::react;
   // To make the API easy to use, we check the status of the surface before calling `start` or `stop`,
   // and we need this mutex to prevent races.
   std::mutex _surfaceMutex;
+
+  // `start` returns before `SurfaceHandler::start()` runs (it hops to the main queue, then to a global one), and
+  // until then the status still reads `Registered`. This keeps a second `start` in that window from attaching the
+  // root view and starting the surface again.
+  std::atomic_bool _startInFlight;
 
   // Can be accessed from the main thread only.
   RCTSurfaceView *_Nullable _view;
@@ -95,7 +101,12 @@ using namespace facebook::react;
 {
   std::lock_guard<std::mutex> lock(_surfaceMutex);
 
+  // Take the flag before reading the status, so a start that finished in between reads as `Running` here.
+  if (_startInFlight.exchange(true)) {
+    return;
+  }
   if (_surfaceHandler->getStatus() != SurfaceHandler::Status::Registered) {
+    _startInFlight = false;
     return;
   }
 
@@ -106,9 +117,15 @@ using namespace facebook::react;
                                                        surfaceId:self->_surfaceHandler->getSurfaceId()];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
       self->_surfaceHandler->start();
+      auto status = self->_surfaceHandler->getStatus();
+      self->_startInFlight = false;
       [self _propagateStageChange];
 
-      [self->_surfacePresenter setupAnimationDriverWithSurfaceHandler:*self->_surfaceHandler];
+      // `start()` is a no-op if the surface got unregistered in the meantime (e.g. by an instance teardown), and then
+      // there is no ShadowTree to take a MountingCoordinator from.
+      if (status == SurfaceHandler::Status::Running) {
+        [self->_surfacePresenter setupAnimationDriverWithSurfaceHandler:*self->_surfaceHandler];
+      }
     });
   });
 }

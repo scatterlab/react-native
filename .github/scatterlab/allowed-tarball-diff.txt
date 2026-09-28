@@ -55,3 +55,15 @@ ReactAndroid/src/main/java/com/facebook/react/views/text/TextDecorationStyle.kt
 # Points the consumer's Gradle build at this fork's Android artifacts. Added file, so the
 # gate sees it as a difference from upstream. See android-prebuilt.md.
 scripts/android/scatterlab-prebuilt-maven.gradle
+
+# A second SurfaceHandler::start() on a running surface hands ShadowTreeRegistry::add()
+# another tree for the same SurfaceId; the registry drops it and `link_.shadowTree` is
+# left dangling, so the next MountingCoordinator lookup crashes (iOS: SIGSEGV at 0x8 in
+# MountingCoordinator::setMountingOverrideDelegate). -[RCTFabricSurface start] checks
+# the status two async hops before start() runs, so racing callers get there twice.
+# start() now ignores a surface that is not Registered, and the iOS surface keeps a
+# second start out while one is in flight. Upstream
+# https://github.com/react/react-native/pull/57404 (open) covers the unregistered case
+# on the iOS side only. C++ reaches Android only through this fork's Android prebuilt.
+ReactCommon/react/renderer/scheduler/SurfaceHandler.cpp
+React/Fabric/Surface/RCTFabricSurface.mm
