@@ -8,6 +8,7 @@
 #include "SurfaceHandler.h"
 
 #include <cxxreact/TraceSection.h>
+#include <glog/logging.h>
 #include <react/debug/react_native_assert.h>
 #include <react/renderer/uimanager/UIManager.h>
 
@@ -37,8 +38,17 @@ Status SurfaceHandler::getStatus() const noexcept {
 void SurfaceHandler::start() const noexcept {
   TraceSection s("SurfaceHandler::start");
   std::unique_lock lock(linkMutex_);
-  react_native_assert(
-      link_.status == Status::Registered && "Surface must be registered.");
+  // Callers can race into a second start (-[RCTFabricSurface start] checks the
+  // status two async hops before this runs). Going on would hand
+  // ShadowTreeRegistry::add() a second tree for the same SurfaceId, which it
+  // drops, leaving `link_.shadowTree` dangling; an unregistered surface has no
+  // `link_.uiManager` at all. So this is a no-op rather than an assert.
+  if (link_.status != Status::Registered) {
+    LOG(WARNING)
+        << "SurfaceHandler::start ignored for a surface that is not in Registered state, surfaceId = "
+        << getSurfaceId() << ", status = " << static_cast<int>(link_.status);
+    return;
+  }
   react_native_assert(
       getLayoutConstraints().layoutDirection != LayoutDirection::Undefined &&
       "layoutDirection must be set.");
