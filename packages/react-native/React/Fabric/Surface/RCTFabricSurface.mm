@@ -112,14 +112,15 @@ using namespace facebook::react;
                                                        surfaceId:self->_surfaceHandler->getSurfaceId()];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
       self->_surfaceHandler->start();
+      auto status = self->_surfaceHandler->getStatus();
+      self->_startInFlight = false;
       [self _propagateStageChange];
 
       // `start()` is a no-op if the surface got unregistered in the meantime (e.g. by an instance teardown), and then
       // there is no ShadowTree to take a MountingCoordinator from.
-      if (self->_surfaceHandler->getStatus() == SurfaceHandler::Status::Running) {
+      if (status == SurfaceHandler::Status::Running) {
         [self->_surfacePresenter setupAnimationDriverWithSurfaceHandler:*self->_surfaceHandler];
       }
-      self->_startInFlight = false;
     });
   });
 }
