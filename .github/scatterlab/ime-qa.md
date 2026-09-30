@@ -1,6 +1,6 @@
 # iOS CJK IME — 기능 검증 런북
 
-이 fork가 싣고 있는 IME 수정(cause 7a)은 **구조적 검증만 끝났다**: 패치가 xcframework에 컴파일돼 소비자 앱에 링크되고 빌드된다는 것까지다. 밑줄이 실제로 복원되는지, 그리고 비-CJK 사용자에게 회귀가 없는지는 **실기기에서만** 확인된다.
+이 fork가 싣고 있는 IME 수정(7a·7b·둔감화 — [README.md](README.md)의 "싣고 있는 IME 수정")이 밑줄을 실제로 복원하는지, 그리고 비-CJK 사용자에게 회귀가 없는지는 **실기기에서만** 확인된다. 빌드·링크 성공은 그 증거가 아니다.
 
 시뮬레이터는 유효한 오라클이 아니다 — UIKit의 marked-text 동작은 문서화되어 있지 않고 iOS 버전 간에 달라진다.
 
@@ -48,7 +48,8 @@
 ```bash
 cd packages/react-native && npm pack           # 계측된 tarball
 # 샘플앱에서
-npm i "file:<tarball>" --legacy-peer-deps
+node -e '…dependencies["react-native"] = "file:<abs tgz>"…'   # 키 형태 필수 — CLAUDE.md "개발 루프"
+npm install --legacy-peer-deps
 cd ios && RCT_USE_PREBUILT_RNCORE=0 bundle exec pod install
 ```
 
