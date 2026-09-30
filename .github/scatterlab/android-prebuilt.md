@@ -26,7 +26,7 @@ configuration.resolutionStrategy.force(
 | 릴리스 태그 | `prebuilt-android-<fork-version>` | iOS의 `prebuilt-ios-<fork-version>`과 대칭. `v`로 시작하지 않아 상류 `publish-npm.yml`의 `v0.*.*` 글롭에 안 걸린다 |
 | 에셋 | `react-native-android-maven-<fork-version>.tar.gz` + `.sha256` | |
 | 호스팅 | GitHub Release 에셋 | 릴리스 AAR 160MB · 디버그 AAR 268MB. npm tarball 동봉은 tarball-diff 게이트와 install 시간을 둘 다 깨뜨린다 |
-| 소비 배선 | fork npm 패키지의 gradle 스크립트 + 소비자 `settings.gradle.kts` 한 줄 | 판정·다운로드·검증·abort를 fork가 소유한다. `@react-native/gradle-plugin`에는 넣을 수 없다 — sibling 7개는 업스트림 정확 버전 고정이 불변식이다 |
+| 소비 배선 | fork npm 패키지의 gradle 스크립트 + 소비자 `settings.gradle.kts` 한 줄 | 판정·다운로드·검증·abort를 fork가 소유한다. `@react-native/gradle-plugin`에는 넣을 수 없다 — sibling은 업스트림 정확 버전 고정이 불변식이다 |
 | 게이트 | 릴리스가 없으면 **abort** | iOS `FORK_REQUIRES_OWN_PREBUILT`와 동일. 모든 `-scatterlab.N`이 Android 릴리스를 가져야 한다 |
 | 공개 시점 | `build`가 **draft**로 만들고, `verify`가 통과한 뒤에만 공개(`--draft=false`) | draft는 push 권한자에게만 보이고 에셋 URL이 나머지에게 404다. 미검증 릴리스가 그 창에서 노출되지 않는다 |
 | 캐시 | `~/.gradle/scatterlab-react-native/<fork-version>/maven` | 아래 "좌표 충돌" 참조 |
@@ -123,7 +123,7 @@ iOS의 warm `~/Library/Caches/ReactNative` 함정과 같은 모양이지만, 여
 
 같은 버전에 대한 두 번의 dispatch가 겹치지 않도록 `concurrency: group: scatterlab-prebuild-android-<version>`으로 **큐잉**한다(취소가 아니라 대기). 취소를 택하면 먼저 돌던 실행이 에셋만 올리고 draft를 정리하지 못한 채 죽을 수 있는데, 그 상태가 뒤 실행이 잠깐 기다리는 것보다 나쁘다.
 
-러너는 `arc-messenger-dev`(Linux). GitHub-hosted 러너는 org IP allow list 밖이라 인증된 `api.github.com` 쓰기가 403이다.
+`prepare`·`verify`는 `arc-messenger-dev`(Linux), `build`는 `[self-hosted, zeta-app-builder]`(아래 "핵심 스텝" 참조). GitHub-hosted 러너는 org IP allow list 밖이라 인증된 `api.github.com` 쓰기가 403이다.
 
 `prepare`는 빌드 전에 버전 두 개를 맞대본다.
 

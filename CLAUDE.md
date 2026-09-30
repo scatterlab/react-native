@@ -20,7 +20,7 @@ zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 
 | 금지 | 이유 |
 | --- | --- |
 | `ReactAndroid/gradle.properties`의 `VERSION_NAME` 변경 | RNGP가 이 값으로 `com.facebook.react:react-android:<v>`를 force resolve → Maven Central에 없는 좌표를 찾다 실패. **Android만** 죽어서 원인 오판하기 쉽다 |
-| `@react-native/*` sibling 7개 exact 핀 변경 | `@react-native/codegen@<fork버전>`을 npm에서 찾다 install 실패. 8개 패키지를 다 배포해야 함 |
+| `@react-native/*` sibling exact 핀 변경 | `@react-native/codegen@<fork버전>`을 npm에서 찾다 install 실패. sibling 전부를 fork 버전으로 함께 배포해야 함 |
 | `scripts/releases/set-version.js` / `set-rn-artifacts-version.js` 실행 | 전자는 sibling 범위를 전부 재작성, 후자는 `VERSION_NAME`을 재작성. 둘 다 위 두 항을 정확히 깨뜨린다 |
 | `package.json`의 `bin` 변경 | zeta의 codepush 배포가 `node_modules/.bin/react-native` 심링크를 복사한다 |
 | `v*` 태그 생성 | 상류 `publish-npm.yml`의 글롭 `v0.*.*`가 `v0.87.1-무엇이든`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없다. 태그는 `prebuilt-ios-` / `prebuilt-android-` / `sl-` 처럼 `v`로 시작하지 않게 |
@@ -83,9 +83,9 @@ self-hosted에서만 나타나는 함정:
 - `runner` 컨텍스트는 **잡 레벨 `env:`에서 못 쓴다** — 워크플로 파싱 자체가 HTTP 422로 실패하고, 증상이 "워크플로가 없다"처럼 보인다
 - Xcode를 핀하지 않는다(러너 기본값 사용). 대신 `Toolchain` 스텝이 버전을 찍는다 — **그 Xcode가 프레임워크의 Swift module interface에 들어가므로 호환성 계약의 일부**다
 - 빌드 산출물은 flavor당 수 GB다. `rm -rf .build third-party`를 `if: always()`로 둔다
-- 상류 워크플로 24개는 트리거가 `main`/`*-stable`/`v0.*` 태그라 `scatterlab/**` push엔 무발화 → **트리에서 지우지 않는다**(지우면 리베이스마다 충돌). 위험한 것만 API로 개별 disable
+- 상류 워크플로 26개는 트리거가 `main`/`*-stable`/`v0.*` 태그라 `scatterlab/**` push엔 무발화 → **트리에서 지우지 않는다**(지우면 리베이스마다 충돌). 위험한 것만 API로 개별 disable
 
-fork 자체 워크플로는 셋이다: `scatterlab-publish.yml`·`scatterlab-prebuild-ios.yml`(둘 다 `workflow_dispatch` 전용)과 `scatterlab-test-prebuilt-probe.yml`. 마지막 것만 `scatterlab/**` push와 `scripts/cocoapods/**` PR에서 자동으로 돈다 — 상류 `test-all`의 Ruby 잡이 `github.repository` 게이트에 막혀 이 fork에서는 아무 테스트도 돌지 않기 때문이다.
+fork 자체 워크플로는 넷이다: `scatterlab-publish.yml`·`scatterlab-prebuild-ios.yml`·`scatterlab-prebuild-android.yml`(셋 다 `workflow_dispatch` 전용)과 `scatterlab-test-prebuilt-probe.yml`. 마지막 것만 `scatterlab/**` push와 `scripts/cocoapods/**` PR에서 자동으로 돈다 — 상류 `test-all`의 Ruby 잡이 `github.repository` 게이트에 막혀 이 fork에서는 아무 테스트도 돌지 않기 때문이다.
 
 ## 개발 루프
 

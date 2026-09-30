@@ -1,8 +1,8 @@
-# scatterlab React Native fork — 배포 파이프라인 (Phase 1)
+# scatterlab React Native fork — 배포 파이프라인
 
 ## 목적
 
-zeta가 **직접 수정한 React Native**를 쓸 수 있는 배포 경로를 확보한다. 첫 사용 사례는 iOS CJK IME composition 수정(상류 이슈 [56463](https://github.com/react/react-native/issues/56463), 수정 PR [56082](https://github.com/react/react-native/pull/56082) — 둘 다 우리가 작성, 미머지)이지만, **Phase 1은 IME 수정을 포함하지 않는다.** 파이프라인 자체를 먼저 확보하고, IME 수정은 정당성 재검증 후 Phase 2에서 별도로 반영한다.
+zeta가 **직접 수정한 React Native**를 쓸 수 있는 배포 경로를 확보한다. 첫 사용 사례는 iOS CJK IME composition 수정(상류 이슈 [56463](https://github.com/react/react-native/issues/56463), 수정 PR [56082](https://github.com/react/react-native/pull/56082) — 둘 다 우리가 작성, 미머지)이지만, 목적은 그 수정이 아니라 파이프라인이다. 싣고 있는 수정은 아래 "싣고 있는 IME 수정"과 `allowed-tarball-diff.txt`가 단일 출처다.
 
 Phase 1의 성공 기준은 단 하나: **상류를 왜곡 없이 재생산하는 사설 패키지를 배포하고, 실제 앱에서 빌드된다.**
 
@@ -11,7 +11,7 @@ Phase 1의 성공 기준은 단 하나: **상류를 왜곡 없이 재생산하�
 | 항목 | 결정 | 근거 |
 | --- | --- | --- |
 | 레포 | `scatterlab/react-native` — `react/react-native`의 **public fork** | fork 가시성은 upstream network에 종속돼 private 불가. fork를 포기하면 Sync fork·cross-fork compare·상류 PR 생성이 전부 사라짐 |
-| 패키지 | `@scatterlab/react-native`, **npmjs.org, public** | GitHub Packages는 public 패키지도 설치에 토큰이 필수라, 공개 배포에서는 마찰만 남는다. npmjs의 `scatterlab` 스코프는 실재 확인됨(`/-/org/scatterlab/user` → 200, 미존재 스코프는 404 `Scope not found`) |
+| 패키지 | `@scatterlab/react-native`, **npmjs.org(public) + GitHub Packages** 동일 tarball | npmjs가 공개 소비 경로다(GitHub Packages는 public 패키지도 설치에 토큰이 필수). GitHub Packages에도 싣는 이유는 yarn이 레지스트리를 스코프 단위로 매핑해서다 — `@scatterlab`을 이미 `npm.pkg.github.com`에 매핑한 소비자는 npmjs 전용 패키지에 닿지 못한다(`scatterlab-publish.yml` 헤더, `registries` 입력). npmjs의 `scatterlab` 스코프는 실재 확인됨(`/-/org/scatterlab/user` → 200, 미존재 스코프는 404 `Scope not found`) |
 | base | 태그 `v0.86.2` (npm `latest`, 2026-07-27) | `v0.86.1`은 GitHub·Maven엔 있으나 **npm 미배포**라 base 불가. `main`은 PR #56082 head보다 937커밋 앞서 비교 기준으로 부적합 |
 | 브랜치 | `scatterlab/0.86.2` | 상류 CI의 `push: branches: [main, *-stable]` 패턴에 안 걸림 |
 | 버전 | `0.86.2-scatterlab.N` — **대시 1개** | 접미사에 대시가 2개면 fork 관련 greedy 정규식(`/(.+)-(.+)/`)이 오파싱 |
@@ -30,9 +30,9 @@ Phase 1의 성공 기준은 단 하나: **상류를 왜곡 없이 재생산하�
 
 실측(이 레포의 yarn 4.12 바이너리, 격리 환경): alias의 on-disk 디렉터리명은 **의존성 키** 이름을 따른다. 레포 내 선례도 존재 — `node_modules/@babel/traverse--for-generate-function-map`.
 
-## fork 변경 전량 (Phase 1)
+## 파이프라인 자체에 필요한 fork 변경
 
-파일 3개. product 소스는 하나도 포함하지 않는다.
+아래 3파일이 파이프라인의 최소 집합이다. fork가 현재 싣는 변경 전량은 `.github/scatterlab/allowed-tarball-diff.txt`가 단일 출처다.
 
 ```
 packages/react-native/package.json
@@ -176,7 +176,7 @@ fork에는 상류 워크플로 26개가 함께 딸려온다. 트리거를 전수
 - ⚠️ `publish-npm.yml`의 태그 글롭 `v0.*.*`는 `v0.86.2-scatterlab.1`도 **매치한다.** fork에 `v*` 태그를 만들지 않는다(필요하면 `sl-` prefix)
 - 위험한 상류 워크플로(`publish-npm`, `test-all`, `validate-*`, `create-*release`, `prebuild-ios-*`)는 API로 개별 disable — 트리 무관이라 리베이스 충돌이 없다
 - CodeQL default setup은 fork 생성 직후 자동 실행되므로 `not-configured`로 해제
-- `workflow_dispatch`는 워크플로 파일이 **기본 브랜치에 있어야** 노출되므로, fork 기본 브랜치를 `scatterlab/0.86.2`로 둔다. `main`은 상류 동기화용으로 남긴다(main에 push하면 상류 CI가 발화하므로 동기화 시 주의)
+- `workflow_dispatch`는 워크플로 파일이 **기본 브랜치에 있어야** 노출되므로, fork 기본 브랜치를 현재 작업 라인 브랜치(`CLAUDE.md`의 "작업 브랜치")로 둔다. `main`은 상류 동기화용으로 남긴다(main에 push하면 상류 CI가 발화하므로 동기화 시 주의)
 
 ## 검증 게이트
 
@@ -290,15 +290,15 @@ Android는 fork의 npm tarball에 든 `ReactAndroid/**` 소스를 아예 컴파�
 
 ### 러너와 Xcode 계약
 
-빌드는 org의 self-hosted 러너에서 돈다 — 맥은 `[self-hosted, gaudi]`, 리눅스 스텝은 `arc-messenger-dev`. **GitHub-hosted 러너로는 릴리스를 만들 수 없다**: org에 IP allow list가 걸려 있어 hosted 러너의 인증된 `api.github.com` 쓰기가 HTTP 403으로 막힌다(아티팩트 업로드는 Actions 서비스라 통과). `publish-prebuilt.sh`가 그 상황용 fallback으로 남아 있다.
+빌드는 org의 self-hosted 러너에서 돈다 — 맥은 `[self-hosted, zeta-app-builder]`, 리눅스 스텝은 `arc-messenger-dev`. **GitHub-hosted 러너로는 릴리스를 만들 수 없다**: org에 IP allow list가 걸려 있어 hosted 러너의 인증된 `api.github.com` 쓰기가 HTTP 403으로 막힌다(아티팩트 업로드는 Actions 서비스라 통과). `publish-prebuilt.sh`가 그 상황용 fallback으로 남아 있다.
 
-**빌드에 쓰인 Xcode 버전은 호환성 계약의 일부다.** prebuilt 프레임워크는 그 Xcode의 Swift module interface를 품고 배포되므로, 소비자 Xcode와 크게 어긋나면 링크·모듈 로딩에서 터질 수 있다. 상류는 `setup-xcode`로 16.4.0을 핀하지만 우리는 러너 기본값을 쓴다(현재 gaudi = **Xcode 26.1.1 / macOS 26.1**). zeta가 Podfile에서 이미 Xcode 26용 fmt 치환을 하고 있어 그쪽에 맞추는 게 맞고, 대신 러너 Xcode가 올라가면 프레임워크 ABI 표면도 같이 움직인다는 뜻이다 — `Toolchain` 스텝이 매 런마다 버전을 찍으므로 릴리스와 대조할 수 있다.
+**빌드에 쓰인 Xcode 버전은 호환성 계약의 일부다.** prebuilt 프레임워크는 그 Xcode의 Swift module interface를 품고 배포되므로, 소비자 Xcode와 크게 어긋나면 링크·모듈 로딩에서 터질 수 있다. 상류는 `setup-xcode`로 16.4.0을 핀하지만 우리는 러너 기본값을 쓴다. zeta가 Podfile에서 이미 Xcode 26용 fmt 치환을 하고 있어 그쪽에 맞추는 게 맞고, 대신 러너 Xcode가 올라가면 프레임워크 ABI 표면도 같이 움직인다는 뜻이다 — `Toolchain` 스텝이 매 런마다 버전을 찍으므로 릴리스와 대조할 수 있다.
 
 self-hosted 전환에 필요했던 조직 설정 2개: 러너 그룹의 **Allow public repositories** + 이 레포 추가, 그리고 public 레포이므로 **Fork pull request workflows → Require approval for all external contributors**(fork가 워크플로 파일을 수정한 PR로 우리 러너에서 임의 코드를 돌리는 것을 막는다).
 
 ### 함정
 
-- **matrix 잡이 같은 호스트에서 병렬로 돈다.** yarn 1의 전역 캐시는 동시성 안전하지 않아 `~/Library/Caches/Yarn` 공유 시 tar 추출이 깨진다(`Extracting tar content of undefined failed`). `--cache-folder "$RUNNER_TEMP/yarn-cache"`로 잡별 격리한다. hosted 러너에선 잡마다 머신이 달라 드러나지 않는 종류의 실패다
+- **matrix 잡이 같은 호스트에서 병렬로 돈다.** yarn 1의 전역 캐시는 동시성 안전하지 않아 `~/Library/Caches/Yarn` 공유 시 tar 추출이 깨진다(`Extracting tar content of undefined failed`). `YARN_CACHE_FOLDER="$RUNNER_TEMP/yarn-cache"`를 `$GITHUB_ENV`로 export하고(`--cache-folder` 플래그로는 부족 — prebuild setup이 내부적으로 두 번째 yarn을 부른다) `max-parallel: 1`로 직렬화한다. hosted 러너에선 잡마다 머신이 달라 드러나지 않는 종류의 실패다
 - **부분 릴리스가 위험하다.** probe는 debug 에셋만 확인하므로 debug만 올라간 릴리스는 probe를 통과시키고 release flavor에서 404가 난다. 한 flavor가 실패하면 릴리스의 에셋을 지우거나 새 `-scatterlab.N`으로 다시 낸다
 - **태그에 `v` 접두를 쓰지 않는다.** 상류 `publish-npm.yml`의 `v0.*.*`는 백트래킹 글롭이라 `v0.86.2-prebuilt.1`도 매치하고, 그 워크플로의 `set_hermes_versions` 잡은 repo 게이트가 없어 fork에서 실제로 돈다. 릴리스를 `GITHUB_TOKEN`으로 만들면 GitHub이 `push`/`create`/`release` 이벤트로 워크플로 런을 아예 만들지 않아 이중으로 안전하다
 - **`RN_DEP_VERSION=<base>`가 setup 단계에 필요하다.** prebuild는 `ReactNativeDependencies.xcframework`를 버전 붙은 Maven URL에서 받는데, 이건 `scripts/cocoapods` 밖의 JS 경로라 위의 Ruby 패치가 커버하지 않는다. fork 접미사면 nightly 폴백까지 실패해 abort 한다
@@ -308,9 +308,7 @@ self-hosted 전환에 필요했던 조직 설정 2개: 러너 그룹의 **Allow 
 
 ## 스코프 밖
 
-- **IME 수정 반영** — 정당성 재검증 후. PR #56082은 상류에서 리뷰 0건이고, cause #7만 프로덕션 실증이 있으며, 나머지 6개는 미검증
 - **RN 0.79.7→0.86.2 업그레이드**, New Architecture 전환, zeta main 적용
-- **Android 네이티브 수정** — 현재 수정 범위가 iOS ObjC++뿐이라 사설 Maven·자체 AAR·Hermes 재배포 전부 불필요. Android 소스를 건드리는 순간 이 결론이 뒤집힌다(`gradle.properties` 계약 참조)
 
 ## 함정 요약
 
