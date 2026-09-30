@@ -21,7 +21,7 @@
 | | 관측 | 의미 |
 | --- | --- | --- |
 | **F1** | controlled 단일행에서 빠른 영문 타이핑·자동수정 중 캐럿이 점프하거나 선택이 붕괴 | 7a를 그대로 쓸 수 없다. 상류 이슈 #44157의 증상이며, 대응은 7b가 **아니라** 등가성 비교를 stripped 키에 둔감하게 만드는 쪽이다 |
-| **F2** | controlled 입력에서 두 번째 글자부터 밑줄이 사라짐 | **관측됐고 해소됐다.** 7a만 실은 `-scatterlab.4`에서 재현(uncontrolled는 정상, controlled만 첫 글자), `-scatterlab.5`의 7b+둔감화로 해결. 다시 나타나면 `-_updateTypingAttributes`의 재strip이 빠진 것이다 |
+| **F2** | controlled 입력에서 두 번째 글자부터 밑줄이 사라짐 | `-_updateTypingAttributes`의 재strip(7b)이 빠졌거나 무력화됐다. 7a만으로는 controlled 경로에서 이 증상이 난다(uncontrolled는 정상, controlled만 첫 글자) |
 | **F3** | `textShadowColor` + offset/radius 0 인 텍스트, 또는 `DynamicColorIOS` 배경을 가진 텍스트의 렌더가 변함 | no-op 판정 술어가 오분류하고 있다 |
 | **F4** | 롤아웃 후 Sentry에 `NSRangeException` / `NSMutableRLEArray objectAtIndex:effectiveRange:`가 새로 나타남 | 별개 크래시(상류 #55950 클램프로도 재현 보고됨). 7a와 무관하지만 같은 창에서 관측된다 |
 
