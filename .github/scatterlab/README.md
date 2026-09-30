@@ -71,7 +71,7 @@ react-native-artifacts-0.86.2-reactnative-core-debug.tar.gz               → 20
 
 한쪽만 내려간 조합은 **중단한다**. 어느 쪽으로 굴러도 나쁘기 때문이다.
 
-- **warm `Pods/`**: CocoaPods가 `Pods/Local Podspecs`에 저장된 이전(prebuilt-deps) install의 `React-Core-prebuilt` 스펙을 재사용한다 — `:podspec` external source는 저장본이 있는 한 재평가되지 않는다(`installer/analyzer.rb`의 refetch 조건: 저장본 없음 / `:path` 소스 / pod 디렉터리 없음 / checkout 옵션 변경). 그 스펙은 이번 install이 더는 선언하지 않는 `ReactNativeDependencies` pod을 요구하므로 해석이 깨진다: `Unable to find a specification for 'ReactNativeDependencies' depended upon by 'React-Core-prebuilt'`. 2026-09-09 배포 실패가 이 경우다(실패 로그에 `React-Core-prebuilt`의 `Fetching podspec for` 줄이 없고 source 모드 third-party pod만 fetch됐다).
+- **warm `Pods/`**: CocoaPods가 `Pods/Local Podspecs`에 저장된 이전(prebuilt-deps) install의 `React-Core-prebuilt` 스펙을 재사용한다 — `:podspec` external source는 저장본이 있는 한 재평가되지 않는다(`installer/analyzer.rb`의 refetch 조건: 저장본 없음 / `:path` 소스 / pod 디렉터리 없음 / checkout 옵션 변경). 그 스펙은 이번 install이 더는 선언하지 않는 `ReactNativeDependencies` pod을 요구하므로 해석이 깨진다: `Unable to find a specification for 'ReactNativeDependencies' depended upon by 'React-Core-prebuilt'`. 이 경우 로그에는 `React-Core-prebuilt`의 `Fetching podspec for` 줄이 없고 source 모드 third-party pod만 fetch된다.
 - **clean `Pods/`**: 반대로 **해석이 성공해버린다**. `s.dependency "ReactNativeDependencies"`는 `rndependencies.rb:49` 한 곳뿐이고 source 분기에서는 glog/boost/…를 대신 선언하기 때문이다. 그러면 prebuilt 바이너리로 컴파일된 core가 source로 빌드된 third-party 심볼과 링크된다 — 에러가 없어서 더 나쁘다.
 
 `--repo-update`·`--clean-install`은 둘 다 복구하지 못한다: 전자는 spec repo만, 후자는 Xcode 프로젝트 캐시만 갱신하고(`installer.rb`의 `clean_install`은 `ProjectCacheAnalyzer`로만 흐른다) 저장된 podspec도 probe 결과도 건드리지 않는다. 저장본을 실제로 무효화하는 건 `pod update <name>`이나 `rm -rf Pods`뿐이다.
