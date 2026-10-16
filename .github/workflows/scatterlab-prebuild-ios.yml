@@ -138,7 +138,15 @@ jobs:
           # is a separate code path from the Ruby patch in scripts/cocoapods.
           RN_DEP_VERSION: ${{ needs.prepare.outputs.base }}
           FLAVOR: ${{ matrix.flavor }}
-        run: node scripts/ios-prebuild.js -s -f "$FLAVOR"
+        # Unset, setup resolves Hermes from npm's `latest-v1` dist-tag, which moves
+        # independently of this tree. Consumers get the hermes-engine pod at
+        # version.properties, so build against that one - as upstream does for stable.
+        run: |
+          set -euo pipefail
+          HERMES_VERSION=$(sed -n 's/^HERMES_VERSION_NAME=//p' sdks/hermes-engine/version.properties)
+          [ -n "$HERMES_VERSION" ] || { echo "::error::HERMES_VERSION_NAME missing from sdks/hermes-engine/version.properties"; exit 1; }
+          echo "HERMES_VERSION=$HERMES_VERSION" >> "$GITHUB_ENV"
+          HERMES_VERSION="$HERMES_VERSION" node scripts/ios-prebuild.js -s -f "$FLAVOR"
 
       # One slice per invocation. mac-catalyst is skipped: the consumer side only
       # declares iOS support, and compose keeps whatever slices it finds.
@@ -171,10 +179,17 @@ jobs:
         run: |
           set -euo pipefail
           # Located rather than hardcoded: the tar path has moved between releases.
-          TGZ=$(find .build/output/xcframeworks -name '*.tar.gz' -type f | grep -viF dsym | head -1)
-          [ -n "$TGZ" ] || { echo "::error::no composed xcframework tarball found"; exit 1; }
-          tar tzf "$TGZ" | head -1 | grep -q '^React.xcframework/' \
-            || { echo "::error::tarball root is not React.xcframework/, React-Core-prebuilt.podspec expects it there"; exit 1; }
+          # Compose also writes a standalone ReactNativeHeaders.xcframework.tar.gz next to
+          # it, so match the core tarball by name: an unordered find could pick either.
+          TGZ=$(find .build/output/xcframeworks -name 'React.xcframework.tar.gz' -type f | head -1)
+          [ -n "$TGZ" ] || { echo "::error::no composed React.xcframework.tar.gz found"; exit 1; }
+          # React-Core-prebuilt.podspec's prepare_command needs both roots and aborts the
+          # consumer's pod install when ReactNativeHeaders.xcframework is missing.
+          ROOTS=$(tar tzf "$TGZ" | cut -d/ -f1 | sort -u)
+          for root in React.xcframework ReactNativeHeaders.xcframework; do
+            grep -qxF "$root" <<<"$ROOTS" \
+              || { echo "::error::tarball has no $root/ at its root (found: ${ROOTS//$'\n'/ }); React-Core-prebuilt.podspec expects it there"; exit 1; }
+          done
 
           OUT="$RUNNER_TEMP/assets-$FLAVOR"
           rm -rf "$OUT"; mkdir -p "$OUT"
