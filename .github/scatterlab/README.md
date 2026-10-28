@@ -41,8 +41,8 @@ packages/react-native/package.json
   publishConfig  → { "access": "public" }
   repository     → scatterlab/react-native
 
-packages/react-native/scripts/cocoapods/rncore.rb        stable_tarball_url 첫 줄
-packages/react-native/scripts/cocoapods/rndependencies.rb  release_tarball_url 첫 줄
+packages/react-native/scripts/cocoapods/rncore.rb        stable_tarball_urls 첫 줄
+packages/react-native/scripts/cocoapods/rndependencies.rb  release_tarball_urls 첫 줄
   version = version.sub(/-scatterlab\.\d+\z/, '')
 ```
 
@@ -61,7 +61,7 @@ react-native-artifacts-0.86.2-reactnative-core-debug.tar.gz               → 20
 
 접미사 정규식은 fork 전용이어야 한다 — 상류의 정상 prerelease(`0.87.0-rc.3`)는 그 전체 버전으로 아티팩트가 실제 존재하므로 벗기면 안 된다. 실측: `0.86.2-scatterlab.1`·`0.86.2-scatterlab.12` → `0.86.2`, `0.87.0-rc.3` → 보존.
 
-`rncore.rb`/`rndependencies.rb`는 공유 코드가 없어 각각 고쳐야 한다. 두 파일 모두 URL 빌더는 stable 1개뿐이고(`stable_tarball_url` / `release_tarball_url`), 로컬 파일명은 `download_*_tarball`의 별도 `version` 인자에서 나온다 — 즉 서로 간섭하지 않는다.
+`rncore.rb`/`rndependencies.rb`는 공유 코드가 없어 각각 고쳐야 한다. 두 파일 모두 stable URL 빌더는 후보 목록 하나뿐이고(`stable_tarball_urls` / `release_tarball_urls` — `ReactNativePodsUtils.maven_repository_urls`가 주는 RN Maven 미러 → Maven Central 순서로 같은 경로를 만든다), 로컬 파일명은 `download_*_tarball`의 별도 `version` 인자에서 나온다 — 즉 서로 간섭하지 않는다.
 
 ### artifact probe는 fail-closed다
 

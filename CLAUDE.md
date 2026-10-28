@@ -1,16 +1,16 @@
 # CLAUDE.md
 
-`scatterlab/react-native` — `react/react-native`의 fork. 설계 문서는 [`.github/scatterlab/README.md`](.github/scatterlab/README.md), Android 아티팩트 배포는 [`.github/scatterlab/android-prebuilt.md`](.github/scatterlab/android-prebuilt.md), IME 검증 절차는 [`.github/scatterlab/ime-qa.md`](.github/scatterlab/ime-qa.md). 이 파일은 **여기서 작업할 때의 운용 규칙과 함정**만 담는다.
+`scatterlab/react-native` — `react/react-native`의 fork. 설계 문서는 [`.github/scatterlab/README.md`](.github/scatterlab/README.md), Android 아티팩트 배포는 [`.github/scatterlab/android-prebuilt.md`](.github/scatterlab/android-prebuilt.md), IME 검증 절차는 [`.github/scatterlab/ime-qa.md`](.github/scatterlab/ime-qa.md). 이 파일은 **여기서 작업할 때의 운용 규칙과 함정**만 담는다. 상류 코드 자체의 기여 규칙은 상류 [`AGENTS.md`](AGENTS.md)를 따른다.
 
 ## 이 레포의 목적
 
 zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 fork. 첫 화물은 iOS CJK IME 조합 밑줄 수정이지만, 목적은 그 수정 자체가 아니라 파이프라인이다.
 
 - 상류: `react/react-native` (`facebook/react-native`는 301 alias). remote `upstream`
-- 작업 브랜치: **`scatterlab/0.87.1`** (기본 브랜치, 태그 `v0.87.1`에서 분기)
-- 지난 라인: `scatterlab/0.86.2`, `scatterlab/0.87.0` — 남겨두지만 새 작업은 올리지 않는다
+- 작업 브랜치: **`scatterlab/0.88.1`** (기본 브랜치, 태그 `v0.88.1`에서 분기)
+- 지난 라인: `scatterlab/0.86.2`, `scatterlab/0.87.0`, `scatterlab/0.87.1`, `scatterlab/0.88.0` — 남겨두지만 새 작업은 올리지 않는다
 - 계측 브랜치: `scatterlab/0.86.2-ime-probe` — `SLIME` 로그가 붙은 실험용. 0.86.2 라인에 묶여 있고 **배포 대상 아님**
-- 산출물: npm `@scatterlab/react-native@0.87.1-scatterlab.N` + GitHub Release `prebuilt-ios-<version>` + `prebuilt-android-<version>`(모든 fork 버전에 필수)
+- 산출물: npm `@scatterlab/react-native@0.88.1-scatterlab.N` + GitHub Release `prebuilt-ios-<version>` + `prebuilt-android-<version>`(모든 fork 버전에 필수)
 - 소비: npm alias — `"react-native": "npm:@scatterlab/react-native@<version>"`
 
 `main`은 상류 동기화용으로만 둔다. **`main`에 push하지 않는다** — 상류 워크플로가 발화한다.
@@ -32,8 +32,8 @@ zeta가 **자체 수정한 RN을 출고할 수 있는 경로**를 갖기 위한 
 ## 배포
 
 ```bash
-gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
-  -f version=0.87.1-scatterlab.N -f dist_tag=latest -f dry_run=false
+gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scatterlab/0.88.1 \
+  -f version=0.88.1-scatterlab.N -f dist_tag=latest -f dry_run=false
 ```
 
 - 인증은 **npm Trusted Publishing (OIDC)** — 토큰 없음. `permissions: id-token: write` + `node-version: 24`(핀 제거 금지, `ubuntu-latest` 기본 npm 10.9.8은 요구치 11.5.1 미달)
@@ -46,8 +46,8 @@ gh workflow run scatterlab-publish.yml --repo scatterlab/react-native --ref scat
 Android는 `com.facebook.react:react-android:<VERSION_NAME>`을 Maven Central에서 force resolve 하므로 **fork의 `ReactAndroid/**` 수정은 npm으로 안 간다**. 패치된 AAR을 따로 낸다.
 
 ```bash
-gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
-  -f version=0.87.1-scatterlab.N -f verify_symbol=<이번에 추가한 식별자> -f dry_run=false
+gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native --ref scatterlab/0.88.1 \
+  -f version=0.88.1-scatterlab.N -f verify_symbol=<이번에 추가한 식별자> -f dry_run=false
 ```
 
 `--ref`로 체크아웃하는 브랜치의 `packages/react-native/package.json` `version`이 **이미** `-f version=`과 같아야 한다 — 워크플로의 `prepare`가 이 둘을 대조하고, 실제 릴리스(`dry_run=false`)에서 다르면 하드 실패한다. 즉 fork의 버전 bump 커밋은 이 명령을 돌리기 전에 먼저 머지돼 있어야 한다.
@@ -61,8 +61,8 @@ gh workflow run scatterlab-prebuild-android.yml --repo scatterlab/react-native -
 prebuilt가 기본(0.84+)이고, 켜지면 **모든 React\* pod의 구현이 `React.xcframework`에서 온다**. 즉 **iOS 소스 수정은 prebuilt가 켜진 채로는 조용히 무효**다. 그래서 자체 빌드·호스팅한다.
 
 ```bash
-gh workflow run scatterlab-prebuild-ios.yml --repo scatterlab/react-native --ref scatterlab/0.87.1 \
-  -f version=0.87.1-scatterlab.N
+gh workflow run scatterlab-prebuild-ios.yml --repo scatterlab/react-native --ref scatterlab/0.88.1 \
+  -f version=0.88.1-scatterlab.N
 ```
 
 **순서 제약**: `FORK_REQUIRES_OWN_PREBUILT = true`이므로 **prebuilt 릴리스가 npm보다 먼저** 있어야 한다. 없으면 소비자 `pod install`이 abort한다(그게 의도다 — 조용히 패치 없는 프레임워크를 출고하는 것보다 낫다).
@@ -135,7 +135,7 @@ xcrun devicectl device process launch --device <id> --console --terminate-existi
 푸시는 항상 브랜치를 명시한다 — 로컬에 상류 `v0.*` 태그가 660여 개 있어서 `--tags`/`--follow-tags`가 사고를 낸다.
 
 ```bash
-git push origin scatterlab/0.87.1
+git push origin scatterlab/0.88.1
 ```
 
 ## 상류 기여
