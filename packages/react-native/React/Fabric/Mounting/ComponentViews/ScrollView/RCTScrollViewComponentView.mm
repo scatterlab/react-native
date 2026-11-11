@@ -34,6 +34,9 @@ static NSString *kOnScrollEndEvent = @"onScrollEnded";
 
 static const CGFloat kClippingLeeway = 44.0;
 
+// Defined in RCTViewComponentView.mm.
+RCT_EXTERN NSInteger RCTViewComponentViewClippingViewCount(void);
+
 static UIScrollViewKeyboardDismissMode RCTUIKeyboardDismissModeFromProps(const ScrollViewProps &props)
 {
   switch (props.keyboardDismissMode) {
@@ -999,6 +1002,10 @@ static inline UIViewAnimationOptions animationOptionsWithCurve(UIViewAnimationCu
 - (void)_remountChildren
 {
   if (ReactNativeFeatureFlags::enableViewCulling()) {
+    return;
+  }
+
+  if (RCTViewComponentViewClippingViewCount() == 0) {
     return;
   }
 

@@ -60,3 +60,16 @@ scripts/android/scatterlab-prebuilt-maven.gradle
 # on the iOS side only. C++ reaches Android only through this fork's Android prebuilt.
 ReactCommon/react/renderer/scheduler/SurfaceHandler.cpp
 React/Fabric/Surface/RCTFabricSurface.mm
+
+# An iOS ScrollView walks its whole content after every mounting transaction and every
+# few points of scrolling, to reach the views that have `removeClippedSubviews` on. Every
+# mounted ScrollView does this on every transaction, and where no view has the prop on
+# the walk only converts a rect per view. RCTViewComponentView now counts the live views
+# that have it on, and -[RCTScrollViewComponentView _remountChildren] returns early while
+# the count is 0. Upstream https://github.com/react/react-native/pull/59284 (open) has
+# the same aim. The last two files also carry upstream
+# https://github.com/react/react-native/pull/58915 (in 0.89), which keeps the prop on a
+# recycled view. Compiled into React.xcframework, like the IME files above.
+React/Fabric/Mounting/ComponentViews/ScrollView/RCTScrollViewComponentView.mm
+React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
+React/Tests/Mounting/RCTViewComponentViewTests.mm

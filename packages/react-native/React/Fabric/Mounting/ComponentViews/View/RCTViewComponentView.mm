@@ -11,6 +11,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <atomic>
 #import <ranges>
 #import <string_view>
 #import <unordered_set>
@@ -39,6 +40,29 @@
 using namespace facebook::react;
 
 const CGFloat BACKGROUND_COLOR_ZPOSITION = -1024.0f;
+
+// Live views with `removeClippedSubviews` on. A ScrollView walks its whole content after
+// every mounting transaction and every few points of scrolling only to reach such views,
+// so it skips the walk while there are none (`-[RCTScrollViewComponentView _remountChildren]`).
+// A count that is too low would leave the children of a clipping view unattached, so it
+// follows the flag itself, not the props: `prepareForRecycle` resets the flag but keeps
+// `_props`. Every change to the flag goes through `RCTSetRemoveClippedSubviews`.
+static std::atomic<NSInteger> gClippingViewCount{0};
+
+RCT_EXTERN NSInteger RCTViewComponentViewClippingViewCount(void);
+NSInteger RCTViewComponentViewClippingViewCount(void)
+{
+  return gClippingViewCount.load();
+}
+
+static void RCTSetRemoveClippedSubviews(BOOL &removeClippedSubviews, BOOL value)
+{
+  if (removeClippedSubviews == value) {
+    return;
+  }
+  removeClippedSubviews = value;
+  gClippingViewCount += value ? 1 : -1;
+}
 
 #if !TARGET_OS_TV
 // iOS Full Keyboard Access only focuses a view when it is an accessibility
@@ -143,6 +167,11 @@ static BOOL RCTViewIsInteractiveAccessibilityElement(UIView *view, const ViewPro
     _removeClippedSubviews = NO;
   }
   return self;
+}
+
+- (void)dealloc
+{
+  RCTSetRemoveClippedSubviews(_removeClippedSubviews, NO);
 }
 
 - (facebook::react::Props::Shared)props
@@ -359,8 +388,10 @@ static BOOL RCTLayerTransformCollapsesAxis(CALayer *layer)
 
   // Disable `removeClippedSubviews` when Fabric View Culling is enabled.
   if (!ReactNativeFeatureFlags::enableViewCulling()) {
-    if (oldViewProps.removeClippedSubviews != newViewProps.removeClippedSubviews) {
-      _removeClippedSubviews = newViewProps.removeClippedSubviews;
+    // Compare against the current state, not `_props`: `prepareForRecycle` resets
+    // `_removeClippedSubviews` but keeps `_props`.
+    if (_removeClippedSubviews != newViewProps.removeClippedSubviews) {
+      RCTSetRemoveClippedSubviews(_removeClippedSubviews, newViewProps.removeClippedSubviews);
       [self _updateRemoveClippedSubviewsState];
     }
   }
@@ -778,7 +809,7 @@ static BOOL RCTLayerTransformCollapsesAxis(CALayer *layer)
   _propKeysManagedByAnimated_DO_NOT_USE_THIS_IS_BROKEN = nil;
   _eventEmitter.reset();
   _isJSResponder = NO;
-  _removeClippedSubviews = NO;
+  RCTSetRemoveClippedSubviews(_removeClippedSubviews, NO);
   _reactSubviews = [NSMutableArray new];
   _layoutMetrics = EmptyLayoutMetrics;
 }
