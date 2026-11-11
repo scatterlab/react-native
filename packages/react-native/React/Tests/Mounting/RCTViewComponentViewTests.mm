@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#import <React/RCTScrollViewComponentView.h>
 #import <React/RCTViewComponentView.h>
 #import <XCTest/XCTest.h>
 #import <react/renderer/components/view/ViewProps.h>
@@ -18,6 +19,34 @@ static Props::Shared makeViewProps(bool removeClippedSubviews)
   auto props = std::make_shared<ViewProps>();
   props->removeClippedSubviews = removeClippedSubviews;
   return props;
+}
+
+// Defined in RCTViewComponentView.mm.
+RCT_EXTERN NSInteger RCTViewComponentViewClippingViewCount(void);
+
+@interface RCTScrollViewComponentView (ClippingWalkTests)
+- (void)_remountChildren;
+@end
+
+// Counts the clipping walks that reach it.
+@interface RCTClippingWalkSpyView : UIView
+@property (nonatomic, assign) NSUInteger walkCount;
+@end
+
+@implementation RCTClippingWalkSpyView
+- (void)updateClippedSubviewsWithClipRect:(CGRect)clipRect relativeToView:(UIView *)clipView
+{
+  self.walkCount++;
+}
+@end
+
+// A ScrollView, 400 points tall, with `content` as its content view.
+static RCTScrollViewComponentView *makeScrollView(UIView *content)
+{
+  RCTScrollViewComponentView *scrollView =
+      [[RCTScrollViewComponentView alloc] initWithFrame:CGRectMake(0, 0, 100, 400)];
+  [scrollView mountChildComponentView:(id)content index:0];
+  return scrollView;
 }
 
 @interface RCTViewComponentViewTests : XCTestCase
@@ -161,6 +190,100 @@ static Props::Shared makeViewProps(bool removeClippedSubviews)
   XCTAssertNil(child.superview);
   NSMutableArray *reactSubviews = [view valueForKey:@"_reactSubviews"];
   XCTAssertEqual(reactSubviews.count, 1u);
+}
+
+#pragma mark - clipping view count
+
+- (void)testClippingViewCountIsNotLoweredTwiceForARecycledView
+{
+  NSInteger baseline = RCTViewComponentViewClippingViewCount();
+
+  RCTViewComponentView *recycled = [RCTViewComponentView new];
+  [recycled updateProps:makeViewProps(true) oldProps:ViewShadowNode::defaultSharedProps()];
+  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline + 1);
+
+  // Recycling turns clipping off but keeps `_props`, which still have it on.
+  [recycled prepareForRecycle];
+  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline);
+
+  // Reused for a view without removeClippedSubviews: the props go from on to off, the view does not.
+  [recycled updateProps:makeViewProps(false) oldProps:nullptr];
+  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline);
+
+  // A count that went below the baseline here would read 0 with this view clipping.
+  RCTViewComponentView *clipping = [RCTViewComponentView new];
+  [clipping updateProps:makeViewProps(true) oldProps:ViewShadowNode::defaultSharedProps()];
+  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline + 1);
+}
+
+- (void)testClippingViewCountFollowsRepeatedUpdatesRecyclingAndDealloc
+{
+  NSInteger baseline = RCTViewComponentViewClippingViewCount();
+
+  @autoreleasepool {
+    RCTViewComponentView *view = [RCTViewComponentView new];
+    auto propsOn = makeViewProps(true);
+    [view updateProps:propsOn oldProps:ViewShadowNode::defaultSharedProps()];
+    [view updateProps:makeViewProps(true) oldProps:propsOn];
+    XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline + 1);
+
+    [view prepareForRecycle];
+    [view prepareForRecycle];
+    XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline);
+
+    // Deallocated below with clipping still on.
+    [view updateProps:makeViewProps(true) oldProps:nullptr];
+    XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline + 1);
+  }
+
+  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), baseline);
+}
+
+- (void)testScrollViewSkipsClippingWalkWhileNoViewClips
+{
+  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), 0);
+
+  RCTClippingWalkSpyView *spy = [RCTClippingWalkSpyView new];
+  RCTViewComponentView *content = [RCTViewComponentView new];
+  [content mountChildComponentView:(id)spy index:0];
+  RCTScrollViewComponentView *scrollView = makeScrollView(content);
+
+  [scrollView _remountChildren];
+  XCTAssertEqual(spy.walkCount, 0u);
+
+  // A clipping view anywhere, here in another ScrollView, turns the walk back on.
+  RCTViewComponentView *otherContent = [RCTViewComponentView new];
+  __unused RCTScrollViewComponentView *otherScrollView = makeScrollView(otherContent);
+  [otherContent updateProps:makeViewProps(true) oldProps:ViewShadowNode::defaultSharedProps()];
+
+  [scrollView _remountChildren];
+  XCTAssertEqual(spy.walkCount, 1u);
+
+  [otherContent updateProps:makeViewProps(false) oldProps:nullptr];
+  [scrollView _remountChildren];
+  XCTAssertEqual(spy.walkCount, 1u);
+}
+
+- (void)testScrollViewAttachesVisibleChildrenOfClippingView
+{
+  RCTViewComponentView *content = [RCTViewComponentView new];
+  content.frame = CGRectMake(0, 0, 100, 1000);
+  RCTScrollViewComponentView *scrollView = makeScrollView(content);
+  [content updateProps:makeViewProps(true) oldProps:ViewShadowNode::defaultSharedProps()];
+
+  UIView *visibleRow = [UIView new];
+  visibleRow.frame = CGRectMake(0, 0, 100, 50);
+  UIView *offscreenRow = [UIView new];
+  offscreenRow.frame = CGRectMake(0, 900, 100, 50);
+  [content mountChildComponentView:(id)visibleRow index:0];
+  [content mountChildComponentView:(id)offscreenRow index:1];
+
+  // A clipping view only tracks new children. The ScrollView's walk attaches the visible ones.
+  XCTAssertNil(visibleRow.superview);
+
+  [scrollView _remountChildren];
+  XCTAssertEqual(visibleRow.superview, content);
+  XCTAssertNil(offscreenRow.superview);
 }
 
 #pragma mark - hitTest against non-invertible transforms (#50797)
