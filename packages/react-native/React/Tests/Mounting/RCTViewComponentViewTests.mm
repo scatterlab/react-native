@@ -241,7 +241,8 @@ static RCTScrollViewComponentView *makeScrollView(UIView *content)
 
 - (void)testScrollViewSkipsClippingWalkWhileNoViewClips
 {
-  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), 0);
+  // The skip only shows while no view in the process clips, so this needs 0 rather than a baseline.
+  XCTAssertEqual(RCTViewComponentViewClippingViewCount(), 0, @"A clipping view from outside this test is alive.");
 
   RCTClippingWalkSpyView *spy = [RCTClippingWalkSpyView new];
   RCTViewComponentView *content = [RCTViewComponentView new];
